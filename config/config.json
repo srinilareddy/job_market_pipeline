@@ -1,0 +1,12 @@
+{
+  "country": "us",
+  "search_terms": [
+    "data analyst",
+    "data engineer",
+    "data scientist",
+    "business analyst"
+  ],
+  "location": "United States",
+  "results_per_page": 50,
+  "pages_to_fetch": 2
+}
