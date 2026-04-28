@@ -5,8 +5,6 @@ from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
 
-# NOTE: This script must live at project/src/db/load_to_db.py
-# parents[2] resolves two levels up to the project root.
 BASE_DIR = Path(__file__).resolve().parents[2]
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 
@@ -33,13 +31,13 @@ def get_engine():
     host = os.getenv("DB_HOST", "127.0.0.1")
     port = os.getenv("DB_PORT", "5432")
     name = os.getenv("DB_NAME", "job_market")
-    user = os.getenv("DB_USER")           # no default — must be in .env
-    pwd  = os.getenv("DB_PASSWORD")       # no default — must be in .env
+    user = os.getenv("DB_USER")       
+    pwd  = os.getenv("DB_PASSWORD")      
 
     if not all([name, user, pwd]):
         raise ValueError("Missing DB_NAME / DB_USER / DB_PASSWORD in .env")
 
-    pwd_enc = quote_plus(pwd)  # safely handles @ and special characters
+    pwd_enc = quote_plus(pwd) 
     url = f"postgresql+psycopg2://{user}:{pwd_enc}@{host}:{port}/{name}"
     return create_engine(url, future=True)
 
@@ -82,7 +80,7 @@ def main():
         companies = sorted(df_jobs["company_name"].fillna("Unknown").unique().tolist())
         upsert_dim(conn, "companies_dim", "company_name", companies)
 
-        # Locations require two columns — handled separately
+        # Locations require two columns 
         location_pairs = (
             df_jobs[["location_name", "state_name"]]
             .fillna("Unknown")
@@ -95,7 +93,7 @@ def main():
                 VALUES (:location_name, :state_name)
                 ON CONFLICT (location_name, state_name) DO NOTHING
             """),
-            location_pairs,  # batched — one round trip for all locations
+            location_pairs,  
         )
 
         if not df_job_skills.empty:
@@ -140,7 +138,6 @@ def main():
             ON CONFLICT (source, source_job_id) DO NOTHING
         """)
 
-        # Batched insert — one round trip instead of one per row
         conn.execute(insert_sql, jobs_insert.to_dict(orient="records"))
 
         # --------------------------------------------------
@@ -163,7 +160,6 @@ def main():
                 .drop_duplicates()
             )
 
-            # Cast to int — after dropna pandas may still hold float64 dtype
             bridge["job_pk"]   = bridge["job_pk"].astype(int)
             bridge["skill_id"] = bridge["skill_id"].astype(int)
 

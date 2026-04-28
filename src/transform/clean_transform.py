@@ -5,17 +5,13 @@ from pathlib import Path
 from datetime import datetime
 import pandas as pd
 
-# NOTE: This script must live at project/src/transform/clean_transform.py
-# parents[2] resolves two levels up to the project root.
 BASE_DIR = Path(__file__).resolve().parents[2]
 RAW_DIR = BASE_DIR / "data" / "raw"
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 # ----------------------------
-# Skills list — extend anytime
-# "r programming" used instead of bare "r" to avoid false matches
-# on words like "for", "your", "other" after lowercasing.
+# Skills list
 # ----------------------------
 SKILLS = [
     # Languages
@@ -134,8 +130,6 @@ def main():
         # Salary fields
         salary_min = job.get("salary_min")
         salary_max = job.get("salary_max")
-        # NOTE: salary_is_predicted is a boolean flag from Adzuna — not a salary value.
-        # We compute salary_avg ourselves from min/max below.
         sal_avg = None
         try:
             if salary_min is not None and salary_max is not None:
@@ -163,7 +157,7 @@ def main():
             "created_at":    created_at,
             "salary_min":    salary_min,
             "salary_max":    salary_max,
-            "salary_avg":    sal_avg,       # correctly computed average, not the boolean flag
+            "salary_avg":    sal_avg,
             "contract_type": contract_type,
             "contract_time": contract_time,
             "redirect_url":  redirect_url,
@@ -182,7 +176,6 @@ def main():
 
     df_jobs = pd.DataFrame(rows)
 
-    # Deduplicate: prefer source_job_id when present, fall back to raw_hash
     df_jobs["dedup_key"] = df_jobs["source_job_id"].fillna(df_jobs["raw_hash"])
     before = len(df_jobs)
     df_jobs = df_jobs.drop_duplicates(subset=["dedup_key"], keep="first").drop(columns=["dedup_key"])
@@ -209,4 +202,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

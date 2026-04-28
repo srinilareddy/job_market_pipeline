@@ -27,7 +27,7 @@ CREATE TABLE skills_dim (
 CREATE TABLE jobs_fact (
   job_pk SERIAL PRIMARY KEY,
   source TEXT NOT NULL DEFAULT 'adzuna',
-  source_job_id TEXT,                    -- adzuna 'id' if available
+  source_job_id TEXT,                    
   title TEXT NOT NULL,
   company_id INT REFERENCES companies_dim(company_id),
   location_id INT REFERENCES locations_dim(location_id),
@@ -39,9 +39,9 @@ CREATE TABLE jobs_fact (
   contract_time TEXT,
   redirect_url TEXT,
   description TEXT,
-  raw_hash TEXT,                         -- helps dedup when source_job_id missing
+  raw_hash TEXT,                  
 
-  -- Dedup rule: prefer unique source_job_id when present
+
   CONSTRAINT uq_source_job UNIQUE (source, source_job_id)
 );
 

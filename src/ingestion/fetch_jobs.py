@@ -7,12 +7,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-
-# ----------------------------
-# Paths / folders
-# NOTE: This script must live at project/src/ingestion/fetch_jobs.py
-# parents[2] resolves two levels up to the project root.
-# ----------------------------
 BASE_DIR = Path(__file__).resolve().parents[2]  # project root
 CONFIG_PATH = BASE_DIR / "config" / "config.json"
 RAW_DIR = BASE_DIR / "data" / "raw"
@@ -23,7 +17,6 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 LOG_FILE = LOG_DIR / "ingestion.log"
 
-# How many times to retry a failed page request before skipping it
 MAX_RETRIES = 3
 # Seconds to wait between retries
 RETRY_DELAY = 10
@@ -84,7 +77,7 @@ def fetch_adzuna_jobs(country: str, search_term: str, location: str,
             "what": search_term,
             "where": location,
             "results_per_page": results_per_page,
-            # "sort_by": "date"  # optional
+            # "sort_by": "date" 
         }
 
         log(f"Fetching page {page}/{pages_to_fetch} | what='{search_term}' | where='{location}'")
@@ -97,7 +90,7 @@ def fetch_adzuna_jobs(country: str, search_term: str, location: str,
                 r.raise_for_status()
                 data = r.json()
                 success = True
-                break  # request succeeded — exit retry loop
+                break  
             except requests.RequestException as e:
                 log(f"  Attempt {attempt}/{MAX_RETRIES} failed: {e}")
                 if attempt < MAX_RETRIES:
@@ -107,10 +100,10 @@ def fetch_adzuna_jobs(country: str, search_term: str, location: str,
                     log(f"  All {MAX_RETRIES} attempts failed for page {page}. Skipping.")
             except ValueError:
                 log(f"  Could not parse JSON on page {page}. Skipping.")
-                break  # malformed response — retrying won't help
+                break 
 
         if not success:
-            continue  # skip this page, move on to the next
+            continue
 
         results = data.get("results", [])
         log(f"  Received {len(results)} jobs on page {page}.")
@@ -166,7 +159,6 @@ def main():
         log("No jobs were collected. Check your API keys, search terms, and location.")
         return
 
-    # Use the number of search terms in the filename so it's self-documenting
     label = "adzuna_roles"
     save_raw_json(all_jobs, provider="adzuna", search_term=label, location=location)
     log(f"Ingestion completed successfully. Total jobs saved: {len(all_jobs)}")
