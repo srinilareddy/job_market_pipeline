@@ -1,260 +1,149 @@
-# Automated Job Market Data Pipeline and Dashboard
+# Job Market Analytics Pipeline
 
-**Author:** Srinila Pogalla 
-**Stack:** Adzuna API . Python · PostgreSQL · Power BI 
+Daily ELT of live U.S. data / software job postings from the **Adzuna REST API** into
+**PostgreSQL** through a **Bronze → Silver → Gold medallion architecture**, orchestrated by
+**Apache Airflow**, served to **Power BI (DAX)** and an **Excel** KPI scorecard.
 
----
-
-## Overview
-
-An end-to-end data pipeline that automatically collects live job postings from the Adzuna Job Search API, cleans and transforms the data, loads it into a structured PostgreSQL database, and visualizes hiring trends in an interactive Power BI dashboard.
-
-The system runs on a daily schedule with no manual intervention required.
-
----
+> Numbers in this README come from `docs/metrics.sql` run against the live database. See
+> [Results](#results) - nothing is quoted that the SQL can't reproduce.
 
 ## Architecture
 
-```
-Adzuna REST API
-      │
-      ▼
-fetch_jobs.py          ← Live API ingestion → data/raw/*.json
-      │
-      ▼
-clean_transform.py     ← ETL: clean, deduplicate, extract skills → data/processed/*.csv
-      │
-      ▼
-load_to_db.py          ← Load into PostgreSQL (fact + dimension schema)
-      │
-      ▼
-quality_checks.py      ← Validate: null checks, dedup, counts
-      │
-      ▼
-Power BI Dashboard     ← Connected directly to PostgreSQL
+```mermaid
+flowchart LR
+    A[Adzuna REST API] -->|fetch_jobs.py| B[(Bronze<br/>raw JSON<br/>data/raw)]
+    B -->|validate_raw gate| C[clean_transform.py<br/>clean, dedupe,<br/>extract skills]
+    C --> D[(Silver CSVs<br/>data/processed)]
+    D -->|validate_silver gate| E[load_to_db.py<br/>idempotent upserts]
+    E --> F[(Silver star schema<br/>jobs_fact, dims, bridge)]
+    F -->|gold_ops.py refresh| G[(Gold<br/>materialized views<br/>schema gold)]
+    G --> H[Power BI<br/>DAX measures]
+    G --> I[Excel scorecard<br/>export_excel.py]
+    F --> J[(ops.pipeline_runs<br/>run log)]
+    J --> H
+    K{{Airflow DAG<br/>job_market_pipeline}} -.orchestrates.-> A
+    K -.Slack alerts.-> L[Slack]
 ```
 
-The pipeline is orchestrated by `run_pipeline.py` and scheduled via macOS launchd to run daily at 8 AM.
+**Diagram description (for alt text / interviews):** left to right, the Adzuna API feeds a
+Bronze folder of raw JSON; a validation gate checks freshness and volume; a transform step
+produces Silver CSVs; a second gate checks row counts; a loader upserts into a PostgreSQL
+star schema; four Gold materialized views are refreshed; Power BI and an Excel scorecard
+read from Gold. A run-log table records every run's outcome and feeds a pipeline-health
+panel. One Airflow DAG orchestrates every step and posts failures to Slack.
 
----
-
-## Database Schema
-
-```
-companies_dim          locations_dim          skills_dim
-─────────────          ─────────────          ──────────
-company_id (PK)        location_id (PK)       skill_id (PK)
-company_name           location_name          skill_name
-                       state_name
-         \                  /                     |
-          \                /                      |
-           ──── jobs_fact ────           job_skills_bridge
-                ─────────                ─────────────────
-                job_pk (PK)              job_pk (FK)
-                title                    skill_id (FK)
-                company_id (FK)
-                location_id (FK)
-                salary_min / max / avg
-                contract_type / time
-                created_at
-                redirect_url
-                description
-                raw_hash
-```
-
----
-
-## Project Structure
-
-```
-job_market_pipeline/
-├── config/
-│   └── config.json              # Search terms, location, pagination settings
-├── src/
-│   ├── ingestion/
-│   │   └── fetch_jobs.py        # Phase 1 — Adzuna API ingestion
-│   ├── transform/
-│   │   └── clean_transform.py   # Phase 2 — ETL and skill extraction
-│   ├── db/
-│   │   ├── init_db.sql          # Database schema creation
-│   │   ├── load_to_db.py        # Phase 2 — Load to PostgreSQL
-│   │   └── quality_checks.py   # Phase 2 — Data validation
-│   └── run_pipeline.py          # Phase 4 — Master pipeline runner
-├── data/
-│   ├── raw/                     # Raw JSON from API (gitignored)
-│   ├── processed/               # Cleaned CSVs (gitignored)
-│   └── logs/                    # Execution logs (gitignored)
-├── .env                         # Credentials — never commit (gitignored)
-├── .env.example                 # Template for environment variables
-├── .gitignore
-└── requirements.txt
-```
-
----
-
-## Setup Instructions
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/your-username/job_market_pipeline.git
-cd job_market_pipeline
-```
-
-### 2. Create and activate a virtual environment
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 3. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Set up environment variables
-Copy the example file and fill in your credentials:
-```bash
-cp .env.example .env
-```
-Edit `.env` with your values:
-```
-ADZUNA_APP_ID=your_app_id_here
-ADZUNA_APP_KEY=your_app_key_here
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_NAME=job_market
-DB_USER=your_db_user
-DB_PASSWORD=your_db_password
-```
-
-### 5. Create the database
-```bash
-psql -U your_db_user -d job_market -f src/db/init_db.sql
-```
-
-### 6. Run the pipeline manually
-```bash
-python src/run_pipeline.py
-```
-
----
-
-## Automation (macOS)
-
-The pipeline is scheduled using macOS launchd to run daily at 8 AM.
-
-**Load the schedule:**
-```bash
-launchctl load ~/Library/LaunchAgents/com.srinila.jobpipeline.plist
-```
-
-**Run immediately:**
-```bash
-launchctl start com.srinila.jobpipeline
-```
-
-**Check the log:**
-```bash
-cat data/logs/cron.log
-```
-
-**Remove the schedule:**
-```bash
-launchctl unload ~/Library/LaunchAgents/com.srinila.jobpipeline.plist
-```
-
----
-
-## Configuration
-
-Edit `config/config.json` to change search terms, location, or pagination:
-
-```json
-{
-  "country": "us",
-  "search_terms": ["data analyst", "data engineer", "data scientist", "business analyst"],
-  "location": "United States",
-  "results_per_page": 50,
-  "pages_to_fetch": 2
-}
-```
-
----
-
-## Power BI Dashboard
-
-The Power BI dashboard connects directly to PostgreSQL and includes:
-
-- **Role Distribution** — job counts by role category
-- **Salary Trends** — average salary over time
-- **Geographic Distribution** — top states by job volume
-- **Company Hiring Comparison** — top hiring companies by role
-- **Skill Demand** — most requested technical skills
-
-To connect Power BI to PostgreSQL:
-1. Open Power BI Desktop
-2. Get Data → PostgreSQL database
-3. Enter your `DB_HOST` and `DB_NAME`
-4. Import all five tables: `jobs_fact`, `companies_dim`, `locations_dim`, `skills_dim`, `job_skills_bridge`
-
----
-
-## Skills Extracted
-
-The pipeline automatically detects 46 technical skills from job descriptions including:
-
-`python` `sql` `r programming` `scala` `java` `bash` `excel` `tableau` `power bi` `looker` `aws` `azure` `gcp` `bigquery` `redshift` `spark` `pyspark` `kafka` `airflow` `dbt` `docker` `kubernetes` `terraform` `git` `pandas` `numpy` `scikit-learn` `mlflow` `postgresql` `mysql` `mongodb` `snowflake` `databricks` `machine learning` `deep learning` `nlp` `data analysis` `data visualization` `data engineering` `statistics` `sas`
-
----
-
-## Data Quality Checks
-
-After every pipeline run the following are validated automatically:
-
-| Check | Expected |
-|---|---|
-| Total jobs | > 0 |
-| Null titles | 0 |
-| Null companies | 0 |
-| Null locations | 0 |
-| Duplicate source IDs | 0 |
-| Distinct skills | > 0 |
-| Skills links | > 0 |
-
-If any critical check fails, the pipeline exits with a non-zero code and logs the failure.
-
----
-
-## Dependencies
-
-```
-pandas==3.0.1
-requests==2.32.5
-SQLAlchemy==2.0.46
-psycopg2-binary==2.9.11
-python-dotenv==1.2.1
-numpy==2.4.2
-```
-
-Full list in `requirements.txt`.
-
----
-
-## Phases
-
-| Phase | Description | Status |
+| Layer | Contents | Location |
 |---|---|---|
-| Phase 1 | API ingestion and raw storage | ✅ Complete |
-| Phase 2 | ETL pipeline and PostgreSQL integration | ✅ Complete |
-| Phase 3 | Power BI dashboard | ✅ Complete |
-| Phase 4 | Automation and optimization | ✅ Complete |
+| Bronze | Raw API responses, timestamped | `data/raw/*.json` |
+| Silver | Cleaned CSVs; star schema (`jobs_fact`, `companies_dim`, `locations_dim`, `skills_dim`, `job_skills_bridge`) | `data/processed/`, PostgreSQL |
+| Gold | `gold.fct_jobs`, `gold.fct_job_skills`, `gold.skill_demand_by_role`, `gold.salary_by_state_role` | PostgreSQL |
+| Ops | `ops.pipeline_runs` (status, row counts per run) | PostgreSQL |
 
----
+## Airflow DAG
 
-## References
+`dags/job_market_pipeline.py` - 10 tasks, daily 06:00 `America/Chicago`.
 
-1. Microsoft. Power BI Documentation. https://learn.microsoft.com/en-us/power-bi/
-2. Adzuna. Job Search API Documentation. https://developer.adzuna.com/
-3. Databricks. Medallion Architecture. https://www.databricks.com/glossary/medallion-architecture
-4. Kimball, R. & Ross, M. The Data Warehouse Toolkit, 3rd ed. Wiley, 2013.
-5. OECD. Online Job Vacancy Data and Skills Demand, 2021.
+```
+bronze:   fetch_adzuna >> validate_raw
+silver:   clean_transform >> validate_silver
+gold:     load_postgres >> refresh_gold >> quality_checks
+publish:  export_excel >> log_run_metrics >> notify_success
+```
+
+Failure handling: per-task retries (fetch: 3 x 10 min), execution timeouts, `max_active_runs=1`
+(scripts read the *newest* file, so runs must never overlap), `AirflowFailException` in the
+validation gates (no pointless retries), Slack alert on retry and on final failure, and a
+`failed` row in `ops.pipeline_runs`. Alerting is best-effort and can never fail a run.
+
+## Quick start
+
+```bash
+# 1. Pipeline environment
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # fill in Adzuna + Postgres credentials
+
+# 2. Database (fresh install only - init_db.sql DROPs tables!)
+createdb job_market
+psql job_market -f src/db/init_db.sql
+psql job_market -f src/db/gold_layer.sql   # new installs; existing ones: docs/MIGRATION.md
+
+# 3. Run once by hand to confirm everything works
+python src/run_pipeline.py      # bronze -> silver -> load -> checks
+python src/db/gold_ops.py refresh
+python src/export/export_excel.py
+```
+
+Existing deployment? Follow `docs/MIGRATION.md` instead (NaN-salary backfill, salary-flag migration, retiring launchd).
+
+### Run Airflow (separate virtualenv)
+
+```bash
+python -m venv ~/airflow-venv && source ~/airflow-venv/bin/activate
+pip install -r requirements-airflow.txt   # use the official constraints file for your Python version
+export AIRFLOW_HOME=~/airflow
+export AIRFLOW__CORE__DAGS_FOLDER=$PWD/dags
+export JOB_MARKET_HOME=$PWD
+export PIPELINE_PYTHON=$PWD/.venv/bin/python   # interpreter that has pandas/psycopg2
+airflow standalone                              # prints the admin password
+```
+
+Slack: create an Incoming Webhook, then in Airflow **Admin > Connections** add a *Slack
+Incoming Webhook* connection with id `slack_webhook` (host `https://hooks.slack.com/services`,
+password = the `T…/B…/…` part). Check field names against the provider docs for your version.
+
+Airflow only runs while its scheduler runs. For real unattended operation, host it on an
+always-on machine (e.g. Docker Compose on a small VM).
+
+## Power BI
+
+`powerbi/queries.pq` (Power Query) loads `gold.fct_jobs`, `gold.fct_job_skills` and
+`ops.pipeline_runs`. `powerbi/measures.dax` holds a calculated date table, 5 calculated columns
+and 39 measures grouped as Core, Salary, Trend, Skills, Pipeline health and KPI formatting, plus
+reconciliation queries to run in DAX query view and compare against `docs/metrics.sql`.
+
+Scheduled refresh of a local Postgres from the Power BI service needs an on-premises data gateway.
+
+## Excel
+
+`python src/export/export_excel.py` writes `output/excel/job_market_scorecard_<date>.xlsx`:
+KPI scorecard and role summary driven by live formulas over `tblJobs`/`tblSkills`/`tblRuns`,
+a skill x role heatmap, and a salary-by-state grid. For a native PivotTable, use
+*Insert > PivotTable > tblJobs*, or load `gold.skill_demand_by_role` with Power Query.
+
+## Data quality
+
+`quality_checks.py` fails the run on: zero jobs, empty titles, duplicate source IDs, NaN salary
+values. Bronze and Silver gates in the DAG fail on stale files, low volume or empty outputs.
+`pytest tests/` covers the skill extractor's known false-positive cases.
+
+## Known limitations
+
+- Skill extraction is rule-based dictionary matching, not a trained model; precision is measured
+  by hand (`docs/metrics.sql`, section 5).
+- `role_family` is a title-keyword heuristic; check the `Other` share.
+- Adzuna estimates most postings' salaries itself; those are flagged (`salary_is_predicted`) and
+  excluded, so salary statistics rest on the small share of postings that state a salary.
+- Adzuna's search API truncates descriptions (~500 characters), so skills are extracted from a
+  snippet, not the full posting; counts understate real requirements.
+- Jobs without a source ID dedupe by a hash only inside a single run's batch.
+
+## Results
+
+_Fill from `docs/metrics.sql` (record the date):_ postings, companies, states, days of history,
+run success rate, % with salary, % with 1+ skill, extraction precision sample.
+
+## Layout
+
+```
+dags/                  Airflow DAG
+src/ingestion/         Adzuna fetch (Bronze)
+src/transform/         clean_transform + skill extractor (Silver)
+src/db/                init_db.sql, gold_layer.sql, load_to_db.py, gold_ops.py, quality_checks.py,
+                       migrate_salary_flag.py, rebuild_skills.py (one-time fixes)
+src/export/            export_excel.py
+powerbi/               queries.pq, measures.dax
+docs/                  metrics.sql, MIGRATION.md, COMMIT_PLAN.md
+tests/                 extractor tests
+config/config.json     search terms, pages
+```
