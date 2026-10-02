@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
+from skill_extractor_hybrid import extract_skills
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 RAW_DIR = BASE_DIR / "data" / "raw"
@@ -11,45 +12,22 @@ PROCESSED_DIR = BASE_DIR / "data" / "processed"
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 # ----------------------------
-# Skills list
-# ----------------------------
-SKILLS = [
-    # Languages
-    "python", "sql", "r programming", "scala", "java", "bash",
-    # Spreadsheet / BI
-    "excel", "tableau", "power bi", "looker", "power query",
-    # Cloud platforms
-    "aws", "azure", "gcp", "bigquery", "redshift",
-    # Big data / pipeline
-    "spark", "pyspark", "hadoop", "airflow", "kafka", "etl", "dbt",
-    # Containers / infra
-    "docker", "kubernetes", "terraform", "linux", "git",
-    # Python libraries
-    "pandas", "numpy", "scikit-learn", "mlflow", "fastapi",
-    # Databases
-    "postgresql", "mysql", "mongodb", "snowflake", "databricks",
-    # ML / analytics
-    "machine learning", "deep learning", "nlp",
-    "data analysis", "data visualization", "data engineering",
-    # Legacy / stats
-    "statistics", "sas",
-]
-
-
-# ----------------------------
 # Helpers
 # ----------------------------
 def newest_raw_file() -> Path:
     """
-    Return the most recently created raw JSON file based on filename.
-    Filenames are timestamped (e.g. adzuna_4_roles_united_states_20250427_080000.json)
-    so alphabetical descending == chronological descending.
-    This is more reliable than st_mtime which changes on file copy/touch.
+    Return the newest raw JSON file using the timestamp
+    embedded at the end of the filename.
     """
-    files = sorted(RAW_DIR.glob("*.json"), reverse=True)
+    files = list(RAW_DIR.glob("*.json"))
     if not files:
         raise FileNotFoundError("No raw JSON files found in data/raw/")
-    return files[0]
+
+    def extract_timestamp(path: Path):
+        parts = path.stem.split("_")
+        return parts[-2] + parts[-1]
+
+    return max(files, key=extract_timestamp)
 
 
 def clean_text(s: str) -> str:
@@ -57,20 +35,6 @@ def clean_text(s: str) -> str:
     if not isinstance(s, str):
         return ""
     return re.sub(r"\s+", " ", s).strip()
-
-
-def extract_skills(description: str) -> list[str]:
-    """
-    Match skills from SKILLS list against a job description.
-    Uses word-boundary-style lookbehind/lookahead to avoid partial matches.
-    """
-    text = clean_text(description).lower()
-    found = []
-    for skill in SKILLS:
-        pattern = r"(?<![a-z0-9])" + re.escape(skill) + r"(?![a-z0-9])"
-        if re.search(pattern, text):
-            found.append(skill)
-    return sorted(set(found))
 
 
 def safe_get(d, path, default=None):
@@ -141,6 +105,11 @@ def main():
         except Exception:
             sal_avg = None
 
+        # Adzuna marks salaries it estimated itself: "1" = predicted, "0" = stated by the employer.
+        # Missing -> None (unknown). Silver keeps everything; Gold decides what counts as disclosed.
+        pred_raw = job.get("salary_is_predicted")
+        salary_is_predicted = None if pred_raw in (None, "") else str(pred_raw).strip().lower() in ("1", "true")
+
         contract_type = clean_text(job.get("contract_type", ""))
         contract_time = clean_text(job.get("contract_time", ""))
         redirect_url  = clean_text(job.get("redirect_url", ""))
@@ -158,6 +127,7 @@ def main():
             "salary_min":    salary_min,
             "salary_max":    salary_max,
             "salary_avg":    sal_avg,
+            "salary_is_predicted": salary_is_predicted,
             "contract_type": contract_type,
             "contract_time": contract_time,
             "redirect_url":  redirect_url,

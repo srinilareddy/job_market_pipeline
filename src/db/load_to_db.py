@@ -74,6 +74,11 @@ def main():
 
     with engine.begin() as conn:
 
+        # Schema self-heal: older databases predate this column (see docs/MIGRATION.md)
+        conn.execute(text("ALTER TABLE jobs_fact ADD COLUMN IF NOT EXISTS salary_is_predicted BOOLEAN"))
+        if "salary_is_predicted" not in df_jobs.columns:
+            df_jobs["salary_is_predicted"] = None
+
         # --------------------------------------------------
         # 1) Upsert dimension tables
         # --------------------------------------------------
@@ -122,18 +127,23 @@ def main():
         # --------------------------------------------------
         jobs_insert = df_jobs[[
             "source", "source_job_id", "title", "company_id", "location_id",
-            "created_at", "salary_min", "salary_max", "salary_avg",
+            "created_at", "salary_min", "salary_max", "salary_avg", "salary_is_predicted",
             "contract_type", "contract_time", "redirect_url", "description", "raw_hash",
         ]].copy()
+
+        # pandas uses NaN/NaT for missing values. Postgres NUMERIC accepts 'NaN' as a
+        # real value (poisoning AVG()) and psycopg2 cannot adapt NaT at all, so
+        # convert every missing value to None -> SQL NULL before inserting.
+        jobs_insert = jobs_insert.astype(object).where(pd.notna(jobs_insert), None)
 
         insert_sql = text("""
             INSERT INTO jobs_fact
                 (source, source_job_id, title, company_id, location_id, created_at,
-                 salary_min, salary_max, salary_avg, contract_type, contract_time,
+                 salary_min, salary_max, salary_avg, salary_is_predicted, contract_type, contract_time,
                  redirect_url, description, raw_hash)
             VALUES
                 (:source, :source_job_id, :title, :company_id, :location_id, :created_at,
-                 :salary_min, :salary_max, :salary_avg, :contract_type, :contract_time,
+                 :salary_min, :salary_max, :salary_avg, :salary_is_predicted, :contract_type, :contract_time,
                  :redirect_url, :description, :raw_hash)
             ON CONFLICT (source, source_job_id) DO NOTHING
         """)

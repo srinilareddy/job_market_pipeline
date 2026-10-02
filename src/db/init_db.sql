@@ -35,6 +35,7 @@ CREATE TABLE jobs_fact (
   salary_min NUMERIC,
   salary_max NUMERIC,
   salary_avg NUMERIC,
+  salary_is_predicted BOOLEAN,           -- Adzuna estimate (TRUE) vs employer-stated (FALSE); NULL = unknown
   contract_type TEXT,
   contract_time TEXT,
   redirect_url TEXT,
