@@ -1,0 +1,160 @@
+# Job Market Pipeline - single-host stack (LocalExecutor, no Redis/Celery).
+# Run from this folder:   cd docker && docker compose build && docker compose up -d
+# Settings come from docker/.env (generate it with ./make-env.sh). See docs/DOCKER.md.
+name: job-market-pipeline
+
+# The image is built ONCE, by airflow-init (the only service with a build section). Every other
+# service just uses it (pull_policy: never). Several services building the same tag in parallel
+# makes Docker fail with 'image ... already exists'.
+x-airflow-common: &airflow-common
+  image: job-market-airflow:3.3.2
+  env_file: .env
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${JWT_SECRET}
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"      # the DAG starts running on its own
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/project/dags
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/auth/passwords.json
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    AIRFLOW_CONN_SLACK_WEBHOOK: '{"conn_type":"slackwebhook","host":"https://hooks.slack.com/services","password":"${SLACK_WEBHOOK_TOKEN:-}"}'
+    # --- pipeline settings (read by dags/job_market_pipeline.py and the src/ scripts) ---
+    JOB_MARKET_HOME: /opt/airflow/project
+    PIPELINE_PYTHON: /opt/airflow/pipeline-venv/bin/python
+    MIN_RAW_JOBS: ${MIN_RAW_JOBS:-1500}
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_NAME: job_market
+    DB_USER: ${POSTGRES_USER}
+    DB_PASSWORD: ${POSTGRES_PASSWORD}
+  volumes:
+    - ..:/opt/airflow/project
+    - airflow-logs:/opt/airflow/logs
+    - airflow-auth:/opt/airflow/auth
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-16}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: job_market
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init/01-create-airflow-db.sh:/docker-entrypoint-initdb.d/01-create-airflow-db.sh:ro
+      - ../src/db/init_db.sql:/docker-entrypoint-initdb.d/02-init_db.sql:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"          # localhost only; use an SSH tunnel for remote BI tools
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d job_market"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # one-shot (root): folders, ownership, admin password file
+  airflow-prep:
+    <<: *airflow-common
+    pull_policy: never
+    user: "0:0"
+    entrypoint: ["/bin/bash", "/opt/airflow/project/docker/prep.sh"]
+    environment:
+      <<: *airflow-env
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+    restart: "no"
+
+  # one-shot: create/upgrade Airflow's metadata tables
+  airflow-init:
+    <<: *airflow-common
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["airflow", "db", "migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-prep:
+        condition: service_completed_successfully
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    pull_policy: never
+    command: api-server
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8080}:8080"               # localhost only; never expose to the internet
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    pull_policy: never
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_healthy
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    pull_policy: never
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # nightly pg_dump of the job_market database, keeps the newest 14 files in ../backups
+  backup:
+    image: postgres:${POSTGRES_VERSION:-16}
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGUSER: ${POSTGRES_USER}
+    volumes:
+      - ../backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          f=/backups/job_market_$$(date +%Y%m%d_%H%M%S).dump
+          if pg_dump -h postgres -d job_market -Fc -f "$$f"; then echo "backup ok: $$f"; else echo "BACKUP FAILED"; rm -f "$$f"; fi
+          ls -1t /backups/job_market_*.dump 2>/dev/null | tail -n +15 | xargs -r rm --
+          sleep 86400
+        done
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  airflow-logs:
+  airflow-auth:

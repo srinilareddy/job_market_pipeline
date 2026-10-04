@@ -29,3 +29,5 @@ env/
 # Power BI (large binary files)
 *.pbix
 output/
+backups/
+*.dump
