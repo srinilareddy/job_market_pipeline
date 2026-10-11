@@ -54,3 +54,26 @@ def test_real_short_skill_mentions_still_found():
     _check("program in C++, C, and Python", ["c", "c++", "python"])
     _check("Unity/C# and Go. You will be responsible", ["go", "c#"])
     _check("Node.js & Golang/Go experience", ["go"])
+
+
+def test_excel_the_verb_is_not_excel_the_software():
+    _check("You should excel in working with large-scale applications", [])
+    _check("Candidates who excel at communication", [])
+    got = set(extract_skills("Proficiency in Microsoft Excel, SQL and Word, Excel and PowerPoint"))
+    assert "excel" in got, got
+
+
+def test_apache_is_a_prefix_not_a_skill():
+    got = set(extract_skills("Apache Airflow DAGs and Apache Spark jobs"))
+    assert {"airflow", "spark"} <= got and "apache" not in got, got
+
+
+def test_hvac_r_is_not_the_r_language():
+    _check("America's largest HVAC/R service provider", [])
+    _check("Python, R, and SQL", ["python", "r", "sql"])
+
+
+def test_aliases_are_merged():
+    got = set(extract_skills("Amazon Web Services (AWS), Google Cloud, Microsoft Azure and Natural Language Processing (NLP)"))
+    assert {"aws", "gcp", "azure", "nlp"} <= got, got
+    assert not ({"amazon web services", "google cloud", "microsoft azure", "natural language processing"} & got), got

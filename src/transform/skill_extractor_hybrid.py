@@ -70,7 +70,7 @@ DEVOPS_INFRASTRUCTURE = {
     "jenkins", "gitlab ci", "github actions", "circleci", "travis ci",
     "ci/cd", "devops", "argo", "helm", "istio", "prometheus", "grafana",
     "nagios", "datadog", "new relic", "splunk", "elk", "linux", "unix",
-    "windows", "nginx", "apache", "tomcat"
+    "windows", "nginx", "tomcat"
 }
 
 # Data Tools & BI
@@ -127,7 +127,7 @@ ALL_KNOWN_SKILLS = (
 # ============================================================================
 AMBIGUOUS_SKILLS = {
     "go", "r", "c", "swift", "ruby", "spring", "express", "storm", "beam",
-    "chef", "puppet", "teams", "windows", "apache", "rest",
+    "chef", "puppet", "teams", "windows", "rest",
 }
 _CONTEXT_PREFIX = r"(?:[,/(;\u2022\-]|\b(?:with|in|using|and|or|of)\b)\s*"
 
@@ -141,7 +141,25 @@ def _ambiguous_match(skill: str, text: str) -> bool:
     block = _BLOCKED_NEXT_WORD.get(skill)
     if block:
         tail += rf"(?!\s+(?i:{block})\b)"
-    return re.search(_CONTEXT_PREFIX + cap + tail, text) is not None
+    # (?<!HVAC) rejects "HVAC/R" (refrigeration), which otherwise reads like "...slash R"
+    return re.search(r"(?<!HVAC)" + _CONTEXT_PREFIX + cap + tail, text) is not None
+
+
+# "excel" is also a verb ("you should excel in..."). The software is virtually always written
+# capitalised, so match only "Excel"/"EXCEL", and not when followed by in/at/under/as/by.
+_CASE_SENSITIVE_SKILLS = {
+    "excel": r"(?<![\w])(?:Excel|EXCEL)(?![\w])(?!\s+(?i:in|at|under|as|by)\b)",
+}
+
+# Different spellings of one skill are merged so counts are not split or double-counted.
+SKILL_ALIASES = {
+    "amazon web services": "aws",
+    "google cloud": "gcp",
+    "microsoft azure": "azure",
+    "natural language processing": "nlp",
+    "k8s": "kubernetes",
+    "rest api": "rest",
+}
 
 # ============================================================================
 # EXCLUSIONS - Things that are definitely NOT skills
@@ -197,6 +215,10 @@ class HybridSkillExtractor:
         
         # 1. Exact matches from known skills
         for skill in ALL_KNOWN_SKILLS:
+            if skill in _CASE_SENSITIVE_SKILLS:
+                if re.search(_CASE_SENSITIVE_SKILLS[skill], text):
+                    candidates.add(skill)
+                continue
             if skill in AMBIGUOUS_SKILLS:
                 if _ambiguous_match(skill, text):
                     candidates.add(skill)
@@ -262,8 +284,8 @@ class HybridSkillExtractor:
         
         # Validate candidates
         valid_skills = {
-            self._normalize(skill) 
-            for skill in candidates 
+            SKILL_ALIASES.get(self._normalize(skill), self._normalize(skill))
+            for skill in candidates
             if self._is_valid_skill(skill)
         }
         
