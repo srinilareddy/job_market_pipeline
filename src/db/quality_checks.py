@@ -39,7 +39,11 @@ def main():
         "Null titles":            "SELECT COUNT(*) FROM jobs_fact WHERE title IS NULL OR title = '';",
         "Null companies":         "SELECT COUNT(*) FROM jobs_fact WHERE company_id IS NULL;",
         "Null locations":         "SELECT COUNT(*) FROM jobs_fact WHERE location_id IS NULL;",
-        "Jobs with salary data":  "SELECT COUNT(*) FROM jobs_fact WHERE salary_avg IS NOT NULL;",
+        "Jobs w/ employer-stated salary": "SELECT COUNT(*) FROM jobs_fact WHERE salary_is_predicted IS FALSE AND salary_avg IS NOT NULL;",
+        "Jobs w/ Adzuna-estimated salary": "SELECT COUNT(*) FROM jobs_fact WHERE salary_is_predicted IS TRUE AND salary_avg IS NOT NULL;",
+        "Jobs w/ unknown salary flag":    "SELECT COUNT(*) FROM jobs_fact WHERE salary_is_predicted IS NULL AND salary_avg IS NOT NULL;",
+        "NaN text values":        "SELECT COUNT(*) FROM jobs_fact WHERE 'NaN' IN (contract_type, contract_time, redirect_url, description);",
+        "NaN salary values":      "SELECT COUNT(*) FROM jobs_fact WHERE salary_avg = 'NaN' OR salary_min = 'NaN' OR salary_max = 'NaN';",
         "Duplicate source IDs": """
             SELECT COUNT(*) FROM (
                 SELECT source, source_job_id, COUNT(*) c
@@ -75,6 +79,16 @@ def main():
         raise SystemExit(f"❌ Quality check FAILED: {null_titles} job(s) have null/empty titles.")
     if duplicates > 0:
         raise SystemExit(f"❌ Quality check FAILED: {duplicates} duplicate source ID(s) detected.")
+    if results["NaN text values"] > 0:
+        raise SystemExit(
+            f"❌ Quality check FAILED: {results['NaN text values']} job(s) have the literal text 'NaN' in a text column. "
+            "Run: python src/db/fix_nan_values.py"
+        )
+    if results["NaN salary values"] > 0:
+        raise SystemExit(
+            f"❌ Quality check FAILED: {results['NaN salary values']} job(s) have NaN salary values "
+            "(should be NULL). Run: python src/db/fix_nan_values.py"
+        )
 
     print("✅ All quality checks passed.")
 

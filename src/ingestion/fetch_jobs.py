@@ -57,7 +57,8 @@ def require_env(name: str) -> str:
 # Adzuna API ingestion
 # ----------------------------
 def fetch_adzuna_jobs(country: str, search_term: str, location: str,
-                      results_per_page: int, pages_to_fetch: int) -> list[dict]:
+                      results_per_page: int, pages_to_fetch: int,
+                      max_days_old: int | None = None) -> list[dict]:
     """
     Fetch job postings from Adzuna API.
     Returns a list of raw job dicts.
@@ -79,6 +80,10 @@ def fetch_adzuna_jobs(country: str, search_term: str, location: str,
             "results_per_page": results_per_page,
             # "sort_by": "date" 
         }
+        # Optional recency filter: only ads posted in the last N days (set "max_days_old" in
+        # config/config.json). Left out when unset, so default behaviour is unchanged.
+        if max_days_old:
+            params["max_days_old"] = int(max_days_old)
 
         log(f"Fetching page {page}/{pages_to_fetch} | what='{search_term}' | where='{location}'")
 
@@ -140,6 +145,7 @@ def main():
     location         = cfg.get("location", "United States")
     results_per_page = int(cfg.get("results_per_page", 50))
     pages_to_fetch   = int(cfg.get("pages_to_fetch", 2))
+    max_days_old     = cfg.get("max_days_old")  # optional, e.g. 30
 
     log("Starting Adzuna ingestion...")
 
@@ -152,6 +158,7 @@ def main():
             location=location,
             results_per_page=results_per_page,
             pages_to_fetch=pages_to_fetch,
+            max_days_old=max_days_old,
         )
         all_jobs.extend(jobs)
 

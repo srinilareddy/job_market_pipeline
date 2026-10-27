@@ -1,0 +1,10 @@
+.git
+.env
+docker/.env
+.venv
+__pycache__
+data
+output
+backups
+*.pbix
+*.xlsx

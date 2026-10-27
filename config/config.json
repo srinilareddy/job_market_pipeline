@@ -4,9 +4,20 @@
     "data analyst",
     "data engineer",
     "data scientist",
-    "business analyst"
+    "business analyst",
+    "machine learning engineer",
+    "ml engineer",
+    "ai engineer",
+    "analytics engineer",
+    "business intelligence analyst",
+    "bi developer",
+    "etl developer",
+    "software engineer",
+    "software developer",
+    "full stack developer",
+    "automation engineer"
   ],
   "location": "United States",
   "results_per_page": 50,
-  "pages_to_fetch": 2
+  "pages_to_fetch": 3
 }

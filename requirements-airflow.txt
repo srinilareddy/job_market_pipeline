@@ -1,0 +1,5 @@
+# Install in a SEPARATE virtualenv from requirements.txt (Airflow pins its own SQLAlchemy etc.)
+# Use the official constraints file - see README "Run Airflow".
+apache-airflow==3.3.2
+apache-airflow-providers-standard
+apache-airflow-providers-slack

@@ -1,0 +1,303 @@
+// =====================================================================
+//  JOB MARKET ANALYTICS - DAX
+//  Model (import mode, from powerbi/queries.pq):
+//      Jobs          <- gold.fct_jobs
+//      JobSkills     <- gold.fct_job_skills
+//      PipelineRuns  <- ops.pipeline_runs
+//      DimDate       <- calculated table below
+//  Relationships (all single-direction, "one" side filters "many"):
+//      DimDate[Date]  1 -> *  Jobs[posting_date]
+//      Jobs[job_pk]   1 -> *  JobSkills[job_pk]
+//      PipelineRuns   stands alone (no relationship)
+//  After creating DimDate: Table tools > Mark as date table > DimDate[Date].
+//
+//  HOW TO ADD: Model view > New table / New column / New measure, paste ONE
+//  block at a time. Or use DAX query view (Desktop, 2024+) with DEFINE ... and
+//  "Update model with changes".
+//  Folder hints in comments:  [Display folder: X]  -> set in Properties pane.
+// =====================================================================
+
+
+// =====================================================================
+// 1. CALCULATED TABLE
+// =====================================================================
+DimDate =
+ADDCOLUMNS (
+    CALENDAR ( MIN ( Jobs[posting_date] ), MAX ( Jobs[posting_date] ) ),
+    "Year",         YEAR ( [Date] ),
+    "Month Number", MONTH ( [Date] ),
+    "Month",        FORMAT ( [Date], "mmm yyyy" ),
+    "Month Sort",   YEAR ( [Date] ) * 100 + MONTH ( [Date] ),     // Sort DimDate[Month] by this column
+    "Week Start",   [Date] - WEEKDAY ( [Date], 2 ) + 1,     // Monday-based week
+    "Is Weekend",   WEEKDAY ( [Date], 2 ) >= 6
+)
+
+
+// =====================================================================
+// 2. CALCULATED COLUMNS  (table: Jobs)
+// =====================================================================
+
+// ---- Salary Band -------------------------------------------------------
+Salary Band =
+VAR s = Jobs[salary_avg]
+RETURN
+    SWITCH (
+        TRUE (),
+        ISBLANK ( s ), "Not disclosed",
+        s < 60000,     "< $60K",
+        s < 90000,     "$60K - $90K",
+        s < 120000,    "$90K - $120K",
+        s < 150000,    "$120K - $150K",
+        "$150K+"
+    )
+
+// Sort-by column for the band above (set Salary Band > Sort by column > Salary Band Sort)
+Salary Band Sort =
+VAR s = Jobs[salary_avg]
+RETURN
+    SWITCH (
+        TRUE (),
+        ISBLANK ( s ), 0,
+        s < 60000,     1,
+        s < 90000,     2,
+        s < 120000,    3,
+        s < 150000,    4,
+        5
+    )
+
+// ---- Seniority (title keyword heuristic - directional, not exact) -------
+// CONTAINSSTRING is case-insensitive.
+Seniority =
+VAR t = Jobs[title]
+RETURN
+    SWITCH (
+        TRUE (),
+        CONTAINSSTRING ( t, "intern" ),                                                   "Intern",
+        CONTAINSSTRING ( t, "principal" ) || CONTAINSSTRING ( t, "director" )
+            || CONTAINSSTRING ( t, "head of" ) || CONTAINSSTRING ( t, "staff " ),         "Principal / Director",
+        CONTAINSSTRING ( t, "lead" ) || CONTAINSSTRING ( t, "manager" ),                  "Lead / Manager",
+        CONTAINSSTRING ( t, "senior" ) || CONTAINSSTRING ( t, "sr." )
+            || CONTAINSSTRING ( t, "sr " ),                                               "Senior",
+        CONTAINSSTRING ( t, "junior" ) || CONTAINSSTRING ( t, "associate" )
+            || CONTAINSSTRING ( t, "entry" ) || CONTAINSSTRING ( t, "jr" ),               "Entry / Junior",
+        "Mid / Unspecified"
+    )
+
+// ---- Posting week (Monday start) for weekly trend axes -----------------
+Posting Week = Jobs[posting_date] - WEEKDAY ( Jobs[posting_date], 2 ) + 1
+
+// ---- Salary source for slicers (from Gold's salary_basis) ----------------
+Salary Source =
+SWITCH (
+    Jobs[salary_basis],
+    "disclosed", "Employer-stated",
+    "estimated", "Adzuna estimate",
+    "unknown",   "Unknown (not backfilled)",
+    "No salary"
+)
+
+
+// =====================================================================
+// 3. MEASURES - CORE            [Display folder: 1 Core]
+// =====================================================================
+Total Jobs = COUNTROWS ( Jobs )
+
+Unique Companies = DISTINCTCOUNT ( Jobs[company_name] )
+
+Jobs With Salary = COUNT ( Jobs[salary_avg] )               // employer-stated only; COUNT ignores blanks
+
+Salary Disclosure % = DIVIDE ( [Jobs With Salary], [Total Jobs] )
+
+Jobs With Estimated Salary = CALCULATE ( [Total Jobs], Jobs[salary_basis] = "estimated" )
+
+Estimated Salary Share = DIVIDE ( [Jobs With Estimated Salary], [Total Jobs] )
+
+Avg Skills per Job = DIVIDE ( COUNTROWS ( JobSkills ), [Total Jobs] )
+
+Skill Coverage % =                                           // jobs with >= 1 extracted skill
+DIVIDE ( CALCULATE ( [Total Jobs], Jobs[skill_count] > 0 ), [Total Jobs] )
+
+Role Classified % =                                          // share NOT in the 'Other' bucket
+DIVIDE ( CALCULATE ( [Total Jobs], Jobs[role_family] <> "Other" ), [Total Jobs] )
+
+Full-Time Share =                                            // of jobs that state a contract time
+DIVIDE (
+    CALCULATE ( [Total Jobs], Jobs[contract_time] = "full_time" ),
+    CALCULATE ( [Total Jobs], Jobs[contract_time] <> BLANK () )
+)
+
+
+// =====================================================================
+// 4. MEASURES - SALARY          [Display folder: 2 Salary]
+//    Jobs[salary_avg] holds EMPLOYER-STATED salaries only. Adzuna estimates
+//    most postings' salaries itself (salary_is_predicted); the Gold layer
+//    nulls those, so every measure below is estimates-free. Typically only a
+//    small share of postings state a salary, so always show [Jobs With Salary]
+//    next to any salary figure.
+// =====================================================================
+Avg Salary = AVERAGE ( Jobs[salary_avg] )
+
+Median Salary = MEDIAN ( Jobs[salary_avg] )
+
+P25 Salary = PERCENTILE.INC ( Jobs[salary_avg], 0.25 )
+
+P75 Salary = PERCENTILE.INC ( Jobs[salary_avg], 0.75 )
+
+// Outlier-trimmed median. Bounds are assumptions: tune after inspecting the data.
+Median Salary (Trimmed) =
+VAR lo = 20000
+VAR hi = 500000
+RETURN
+    CALCULATE ( MEDIAN ( Jobs[salary_avg] ), Jobs[salary_avg] >= lo, Jobs[salary_avg] <= hi )
+
+
+// =====================================================================
+// 5. MEASURES - TIME / KPI CARDS  [Display folder: 3 Trend]
+//    Anchored on the newest posting date (not TODAY()) so the report stays
+//    correct when the pipeline is paused. REMOVEFILTERS(DimDate) makes the
+//    KPI cards ignore date slicers by design; role/state slicers still apply.
+// =====================================================================
+Data Through = CALCULATE ( MAX ( Jobs[posting_date] ), ALL ( Jobs ) )
+
+Jobs Last 7 Days =
+VAR anchor = [Data Through]
+RETURN
+    CALCULATE (
+        [Total Jobs],
+        REMOVEFILTERS ( DimDate ),
+        DimDate[Date] > anchor - 7,
+        DimDate[Date] <= anchor
+    )
+
+Jobs Prior 7 Days =
+VAR anchor = [Data Through]
+RETURN
+    CALCULATE (
+        [Total Jobs],
+        REMOVEFILTERS ( DimDate ),
+        DimDate[Date] > anchor - 14,
+        DimDate[Date] <= anchor - 7
+    )
+
+Jobs WoW Change = [Jobs Last 7 Days] - [Jobs Prior 7 Days]
+
+Jobs WoW % =
+VAR prev = [Jobs Prior 7 Days]
+RETURN IF ( prev = 0, BLANK (), DIVIDE ( [Jobs Last 7 Days] - prev, prev ) )
+
+Jobs MTD = TOTALMTD ( [Total Jobs], DimDate[Date] )
+
+Jobs Prior Month = CALCULATE ( [Total Jobs], DATEADD ( DimDate[Date], -1, MONTH ) )
+
+Jobs MoM % = DIVIDE ( [Jobs MTD] - [Jobs Prior Month], [Jobs Prior Month] )
+
+// 7-day rolling average for a daily line chart (days with no postings count as 0)
+Jobs 7-Day Avg =
+VAR window = DATESINPERIOD ( DimDate[Date], MAX ( DimDate[Date] ), -7, DAY )
+RETURN DIVIDE ( CALCULATE ( [Total Jobs], window ), 7 )
+
+Cumulative Jobs =
+CALCULATE ( [Total Jobs], FILTER ( ALL ( DimDate[Date] ), DimDate[Date] <= MAX ( DimDate[Date] ) ) )
+
+
+// =====================================================================
+// 6. MEASURES - SKILLS          [Display folder: 4 Skills]
+//    Jobs filters JobSkills (one-to-many), so a role/state slicer narrows the
+//    skill counts, while the denominator [Total Jobs] is unaffected by the
+//    skill rows: [Skill Demand %] = share of the *selected* jobs wanting the skill.
+// =====================================================================
+Jobs With Skill = DISTINCTCOUNT ( JobSkills[job_pk] )
+
+Skill Demand % = DIVIDE ( [Jobs With Skill], [Total Jobs] )
+
+Skill Rank =
+RANKX ( ALLSELECTED ( JobSkills[skill_name] ), [Jobs With Skill], , DESC, DENSE )
+
+Top Skill =
+VAR top1 =
+    TOPN ( 1, VALUES ( JobSkills[skill_name] ), [Jobs With Skill], DESC, JobSkills[skill_name], ASC )
+RETURN
+    MAXX ( top1, JobSkills[skill_name] )
+
+Top Skill % =
+VAR top1 =
+    TOPN ( 1, VALUES ( JobSkills[skill_name] ), [Jobs With Skill], DESC, JobSkills[skill_name], ASC )
+RETURN
+    MAXX ( top1, [Skill Demand %] )
+
+
+// =====================================================================
+// 7. MEASURES - PIPELINE HEALTH  [Display folder: 5 Pipeline]
+//    Requires PipelineRuns.run_ts converted to UTC in Power Query (queries.pq).
+// =====================================================================
+Last Successful Run = CALCULATE ( MAX ( PipelineRuns[run_ts] ), PipelineRuns[status] = "success" )
+
+Hours Since Last Run = DATEDIFF ( [Last Successful Run], UTCNOW (), HOUR )
+
+Pipeline Success Rate =
+DIVIDE (
+    CALCULATE ( COUNTROWS ( PipelineRuns ), PipelineRuns[status] = "success" ),
+    COUNTROWS ( PipelineRuns )
+)
+
+Jobs Added (Latest Run) =
+VAR lastRun = [Last Successful Run]
+RETURN CALCULATE ( SUM ( PipelineRuns[jobs_added] ), PipelineRuns[run_ts] = lastRun )
+
+Data Freshness =                                             // daily schedule: >26h means a missed run
+SWITCH (
+    TRUE (),
+    ISBLANK ( [Hours Since Last Run] ), "No runs logged",
+    [Hours Since Last Run] <= 26,       "Fresh",
+    [Hours Since Last Run] <= 50,       "Stale (1 missed run)",
+    "Failing"
+)
+
+
+// =====================================================================
+// 8. KPI CARD FORMATTING        [Display folder: 6 Formatting]
+//    Use in: Format > Cell elements / Callout value > Font color > Fx > Field value.
+// =====================================================================
+WoW Arrow =
+VAR p = [Jobs WoW %]
+RETURN IF ( ISBLANK ( p ), "-", IF ( p > 0, "▲", IF ( p < 0, "▼", "▬" ) ) )
+
+WoW Label =
+VAR p = [Jobs WoW %]
+RETURN IF ( ISBLANK ( p ), "n/a", FORMAT ( p, "+0.0%;-0.0%;0.0%" ) & " " & [WoW Arrow] )
+
+WoW Color = IF ( [Jobs WoW %] >= 0, "#2E7D32", "#C62828" )
+
+Freshness Color =
+SWITCH ( [Data Freshness], "Fresh", "#2E7D32", "No runs logged", "#6B7280", "Stale (1 missed run)", "#ED6C02", "#C62828" )
+
+// Native KPI visual: Value = [Jobs Last 7 Days], Target = [Jobs Prior 7 Days],
+// Trend axis = DimDate[Week Start].  Card visual: [Total Jobs], [Median Salary],
+// [Salary Disclosure %], [Unique Companies], [Top Skill], [Pipeline Success Rate].
+
+
+// =====================================================================
+// 9. RECONCILIATION QUERIES  (Desktop > DAX query view)
+//    Run, then compare each number with the SQL in docs/metrics.sql.
+//    If they differ, the model (types / relationships) is wrong, not the data.
+// =====================================================================
+EVALUATE
+ROW (
+    "Total Jobs",          [Total Jobs],
+    "Unique Companies",    [Unique Companies],
+    "Jobs With Salary",    [Jobs With Salary],
+    "Median Salary",       [Median Salary],
+    "Salary Disclosure %", [Salary Disclosure %],
+    "Jobs Last 7 Days",    [Jobs Last 7 Days],
+    "Jobs Prior 7 Days",   [Jobs Prior 7 Days],
+    "Top Skill",           [Top Skill],
+    "Top Skill %",         [Top Skill %],
+    "Success Rate",        [Pipeline Success Rate]
+)
+
+EVALUATE
+TOPN (
+    10,
+    SUMMARIZECOLUMNS ( JobSkills[skill_name], "Jobs", [Jobs With Skill], "Pct", [Skill Demand %] ),
+    [Jobs], DESC
+)
