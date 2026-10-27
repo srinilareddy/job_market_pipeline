@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -20,6 +21,10 @@ SCRIPTS = [
     BASE_DIR / "src" / "db"        / "quality_checks.py",
 ]
 
+# After the four steps above succeed: refresh the Gold views and write this run to
+# ops.pipeline_runs (so the Excel scorecard's "Pipeline health" reflects real runs).
+GOLD_OPS = BASE_DIR / "src" / "db" / "gold_ops.py"
+
 
 # ----------------------------
 # Helpers
@@ -40,20 +45,19 @@ def separator(char: str = "-", width: int = 50) -> None:
 # ----------------------------
 # Runner
 # ----------------------------
-def run_script(script: Path) -> bool:
+def run_script(script: Path, args: list[str] | None = None) -> tuple[bool, str]:
     """
     Run a single script using the same Python interpreter as this process.
-    Returns True on success, False on failure.
-    Streams stdout and stderr to the pipeline log.
+    Returns (success, stdout). Streams stdout and stderr to the pipeline log.
     """
     log(f"▶ Starting: {script.name}")
 
     if not script.exists():
         log(f"  ERROR: Script not found at {script}")
-        return False
+        return False, ""
 
     result = subprocess.run(
-        [sys.executable, str(script)],
+        [sys.executable, str(script), *(args or [])],
         capture_output=True,
         text=True,
     )
@@ -70,10 +74,19 @@ def run_script(script: Path) -> bool:
 
     if result.returncode != 0:
         log(f"  ❌ FAILED: {script.name} exited with code {result.returncode}")
-        return False
+        return False, result.stdout
 
     log(f"  ✅ Finished: {script.name}")
-    return True
+    return True, result.stdout
+
+
+def abort(run_id: str, failed_task: str) -> None:
+    """Record the failed run (best effort), then exit non-zero so launchd sees the failure."""
+    run_script(GOLD_OPS, ["log-failure", "--run-id", run_id, "--failed-task", failed_task])
+    separator("=")
+    log("PIPELINE ABORTED — fix the error above and re-run.")
+    separator("=")
+    sys.exit(1)  # non-zero exit so cron / Task Scheduler detects failure
 
 
 def main():
@@ -82,15 +95,32 @@ def main():
     separator("=")
 
     start = datetime.now()
+    run_id = "launchd__" + start.strftime("%Y%m%dT%H%M%S")
+    raw_records = None
 
     for script in SCRIPTS:
         separator()
-        success = run_script(script)
+        success, out = run_script(script)
+        if script.name == "fetch_jobs.py":
+            m = re.search(r"Total jobs saved: (\d+)", out)
+            raw_records = m.group(1) if m else None
         if not success:
-            separator("=")
-            log("PIPELINE ABORTED — fix the error above and re-run.")
-            separator("=")
-            sys.exit(1)  # non-zero exit so cron / Task Scheduler detects failure
+            abort(run_id, script.name)
+
+    # Gold refresh is part of the run: if it fails the run is failed (Gold would be stale).
+    separator()
+    success, _ = run_script(GOLD_OPS, ["refresh"])
+    if not success:
+        abort(run_id, "gold_refresh")
+
+    separator()
+    args = ["log-success", "--run-id", run_id]
+    if raw_records:
+        args += ["--raw-records", raw_records]
+    success, _ = run_script(GOLD_OPS, args)
+    if not success:
+        # Data is loaded and checked; only the run-log row is missing. Warn, don't fail the run.
+        log("  WARNING: could not write this run to ops.pipeline_runs")
 
     elapsed = (datetime.now() - start).seconds
     separator("=")
