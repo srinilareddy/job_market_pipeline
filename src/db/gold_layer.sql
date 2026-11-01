@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS ops.pipeline_runs (
     skill_links  INT
 );
 
+-- API call counters per run. ADD COLUMN IF NOT EXISTS keeps this DDL idempotent, so existing databases
+-- (native and Docker) pick the columns up the next time gold_ops.py refresh runs.
+ALTER TABLE ops.pipeline_runs
+    ADD COLUMN IF NOT EXISTS api_calls    INT,
+    ADD COLUMN IF NOT EXISTS api_retries  INT,
+    ADD COLUMN IF NOT EXISTS api_failures INT;
+
 -- ---------------------------------------------------------------------
 -- gold.fct_jobs : one row per job, denormalised, with derived columns
 -- (changing this definition requires DROP ... CASCADE - see src/db/migrate_salary_flag.py)

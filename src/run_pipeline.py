@@ -97,6 +97,7 @@ def main():
     start = datetime.now()
     run_id = "launchd__" + start.strftime("%Y%m%dT%H%M%S")
     raw_records = None
+    api_args: list[str] = []
 
     for script in SCRIPTS:
         separator()
@@ -104,6 +105,9 @@ def main():
         if script.name == "fetch_jobs.py":
             m = re.search(r"Total jobs saved: (\d+)", out)
             raw_records = m.group(1) if m else None
+            mc = re.search(r"API metrics: calls=(\d+) retries=(\d+) failures=(\d+)", out)
+            if mc:
+                api_args = ["--api-calls", mc.group(1), "--api-retries", mc.group(2), "--api-failures", mc.group(3)]
         if not success:
             abort(run_id, script.name)
 
@@ -117,6 +121,7 @@ def main():
     args = ["log-success", "--run-id", run_id]
     if raw_records:
         args += ["--raw-records", raw_records]
+    args += api_args
     success, _ = run_script(GOLD_OPS, args)
     if not success:
         # Data is loaded and checked; only the run-log row is missing. Warn, don't fail the run.

@@ -14,11 +14,12 @@ and publishes analysis-ready views and an **Excel** KPI scorecard. An **Apache A
 
 | Component | Status |
 |---|---|
-| Daily ELT (Bronze → Silver → Gold), scheduled with launchd | **Running.** 20 consecutive daily runs (Sep 22 – Oct 11, 2026), each passing the quality checks |
-| Gold materialized views + run log (`ops.pipeline_runs`) | **Built.** Every daily run refreshes Gold and logs itself |
+| Daily ELT (Bronze → Silver → Gold), scheduled with launchd | **Running.** 45 consecutive daily runs (Sep 18 – Nov 1, 2026), each passing the quality checks. Earlier September runs failed in the load step because the database was not reachable |
+| Gold materialized views + run log (`ops.pipeline_runs`) | **Built.** Every daily run since 2026-10-27 refreshes Gold and logs itself |
 | Excel KPI scorecard (live formulas) | **Built** |
 | Airflow DAG (10 tasks) + Docker Compose stack | **Built and validated through manual runs.** Its own schedule is paused: Docker stops when a laptop sleeps (see Roadmap) |
 | Tests | 12 pytest tests on the skill extractor, run by GitHub Actions on every push |
+| Grafana run-log board (optional, local) | **Built.** Reads `ops.pipeline_runs` through a read-only role; covers runs since 2026-10-27 (see Monitoring) |
 | Power BI report (DAX) | **Not built.** Draft Power Query and DAX measures are in `powerbi/`, untested |
 | Slack alerts | **Not configured.** The DAG has the callback; no webhook is connected |
 
@@ -54,23 +55,24 @@ Airflow DAG.
 
 ## Results
 
-As of **2026-10-11** (`docs/metrics.sql`):
+As of **2026-11-01** (`docs/metrics.sql`; the Excel scorecard was generated the same day):
 
 | Metric | Value |
 |---|---|
-| Postings / companies | 20,311 / 4,957 |
-| Collected per daily run | 2,250 (15 searches × 3 pages × 50 results) |
-| Posted in the last 90 days | 96.3% (52.6% in the last 14 days) |
+| Postings / companies | 29,364 / 6,362 |
+| Collected per daily run | 2,250 (15 searches × 3 pages × 50 results); 289–593 are new (five scheduled runs, Oct 28 – Nov 1) |
+| Posted in the last 90 days | 96.3% (52.6% in the last 14 days), measured on 2026-10-11 |
 | Role families | 9; 0.6% unclassified |
-| Postings with an employer-stated salary | 986 (4.9%); median $126,000 |
-| Salary values that are Adzuna estimates | 95.1% (kept separate and excluded from salary statistics) |
-| Distinct skills / postings with 1+ skill | 196 / 32.6% |
-| Quality-check passes | 20 of 20 consecutive daily runs (Sep 22 – Oct 11) |
+| Postings with an employer-stated salary | 2,179 (7.4%); median $130,000 |
+| Salary values that are Adzuna estimates | 92.6% (kept separate and excluded from salary statistics) |
+| Distinct skills / postings with 1+ skill | 206 / 35.4% |
+| Quality-check passes | 45 consecutive daily runs (Sep 18 – Nov 1) |
 
 Reproduce the reliability figure from the scheduler log:
 
 ```bash
-grep -E "All quality checks passed|FAILED" data/logs/cron.log | tail -n 20
+grep "All quality checks passed" data/logs/cron.log | tail -n 45 | cut -c2-11   # one date per passing day
+grep "FAILED" data/logs/cron.log | cut -c2-11 | sort -u | tail -n 3          # last failing date
 ```
 
 ## Data quality decisions
@@ -148,18 +150,27 @@ scorecard and role summary driven by live formulas (COUNTIFS, AVERAGEIFS, MEDIAN
 Tables, a skill × role heatmap, and a salary-by-state grid. A native PivotTable can be added from
 `tblJobs` (Insert > PivotTable).
 
+## Monitoring
+
+An optional Grafana board (Docker, bound to localhost) reads the pipeline's own run log, `ops.pipeline_runs`,
+through a read-only database role. It shows runs logged, success rate, failed runs, API call success rate, retries
+and skipped pages, new postings per run, total postings over time, and the latest runs. Run logging started on 2026-10-27, so earlier runs (including the
+September failures) appear only in `data/logs/cron.log`. API counters are logged from the first run after the
+API-logging change. Setup and limits: `docs/MONITORING.md`.
+
 ## Screenshots
 
 ![Airflow graph view](docs/img/airflow_graph.png)
 ![Excel KPI scorecard](docs/img/excel_scorecard.png)
+![Grafana run-log board](docs/img/grafana_pipeline_runs.png)
 
 ## Known limitations
 
 - Adzuna's search API truncates descriptions (about 500 characters), so skills come from a snippet:
-  only 32.6% of postings have a detected skill, and skill counts are lower bounds, not demand.
+  only 35.4% of postings have a detected skill, and skill counts are lower bounds, not demand.
 - `role_family` is a title-keyword heuristic. Check the "Other" share.
-- Salary statistics rest on the 4.9% of postings that state a salary.
-- About 6.8% of postings have no state (Adzuna returns a bare "US" location).
+- Salary statistics rest on the 7.4% of postings that state a salary (as of 2026-11-01).
+- About 7.3% of postings have no state (Adzuna returns a bare "US" location).
 - Skill extraction is dictionary matching, not a trained model; treat counts as directional.
 
 ## Roadmap

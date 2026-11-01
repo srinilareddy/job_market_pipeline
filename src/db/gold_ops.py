@@ -4,7 +4,7 @@ gold_ops.py  --  Gold-layer operations, called by the Airflow DAG (or by hand).
   python gold_ops.py refresh
       Ensure gold/ops objects exist (gold_layer.sql) and REFRESH the materialized views.
 
-  python gold_ops.py log-success --run-id RUN --raw-records N
+  python gold_ops.py log-success --run-id RUN --raw-records N [--api-calls N --api-retries N --api-failures N]
       Write the run's metrics to ops.pipeline_runs and print them as one JSON line
       (Airflow's BashOperator pushes the last stdout line to XCom).
 
@@ -33,7 +33,8 @@ MATERIALIZED_VIEWS = [
 
 LOG_SUCCESS_SQL = text("""
     INSERT INTO ops.pipeline_runs
-        (run_id, status, failed_task, raw_records, jobs_total, jobs_added, companies, skills, skill_links)
+        (run_id, status, failed_task, raw_records, jobs_total, jobs_added, companies, skills, skill_links,
+         api_calls, api_retries, api_failures)
     SELECT
         :run_id, 'success', NULL, :raw_records,
         (SELECT COUNT(*) FROM jobs_fact),
@@ -43,13 +44,16 @@ LOG_SUCCESS_SQL = text("""
                         ORDER BY run_ts DESC LIMIT 1), 0),
         (SELECT COUNT(*) FROM companies_dim),
         (SELECT COUNT(*) FROM skills_dim),
-        (SELECT COUNT(*) FROM job_skills_bridge)
+        (SELECT COUNT(*) FROM job_skills_bridge),
+        :api_calls, :api_retries, :api_failures
     ON CONFLICT (run_id) DO UPDATE SET
         run_ts = now(), status = 'success', failed_task = NULL,
         raw_records = EXCLUDED.raw_records, jobs_total = EXCLUDED.jobs_total,
         jobs_added = EXCLUDED.jobs_added, companies = EXCLUDED.companies,
-        skills = EXCLUDED.skills, skill_links = EXCLUDED.skill_links
-    RETURNING run_id, raw_records, jobs_total, jobs_added, companies, skills, skill_links
+        skills = EXCLUDED.skills, skill_links = EXCLUDED.skill_links,
+        api_calls = EXCLUDED.api_calls, api_retries = EXCLUDED.api_retries, api_failures = EXCLUDED.api_failures
+    RETURNING run_id, raw_records, jobs_total, jobs_added, companies, skills, skill_links,
+              api_calls, api_retries, api_failures
 """)
 
 LOG_FAILURE_SQL = text("""
@@ -69,10 +73,13 @@ def refresh() -> None:
             print(f"refreshed {mv}: {n} rows")
 
 
-def log_success(run_id: str, raw_records: int | None) -> None:
+def log_success(run_id: str, raw_records: int | None, api_calls: int | None = None,
+                api_retries: int | None = None, api_failures: int | None = None) -> None:
     engine = get_engine()
     with engine.begin() as conn:
-        row = conn.execute(LOG_SUCCESS_SQL, {"run_id": run_id, "raw_records": raw_records}).mappings().one()
+        row = conn.execute(LOG_SUCCESS_SQL, {"run_id": run_id, "raw_records": raw_records,
+                                             "api_calls": api_calls, "api_retries": api_retries,
+                                             "api_failures": api_failures}).mappings().one()
     print(json.dumps(dict(row)))
 
 
@@ -100,6 +107,9 @@ def main() -> None:
     s = sub.add_parser("log-success")
     s.add_argument("--run-id", required=True)
     s.add_argument("--raw-records", default=None)
+    s.add_argument("--api-calls", default=None)
+    s.add_argument("--api-retries", default=None)
+    s.add_argument("--api-failures", default=None)
     f = sub.add_parser("log-failure")
     f.add_argument("--run-id", required=True)
     f.add_argument("--failed-task", default="unknown")
@@ -108,7 +118,8 @@ def main() -> None:
     if a.cmd == "refresh":
         refresh()
     elif a.cmd == "log-success":
-        log_success(a.run_id, _int_or_none(a.raw_records))
+        log_success(a.run_id, _int_or_none(a.raw_records), _int_or_none(a.api_calls),
+                    _int_or_none(a.api_retries), _int_or_none(a.api_failures))
     else:
         log_failure(a.run_id, a.failed_task)
 

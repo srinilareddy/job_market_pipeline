@@ -57,10 +57,11 @@ SELECT
     MAX(run_ts)::date                                                 AS last_run,
     ROUND(AVG(raw_records) FILTER (WHERE status = 'success'))         AS avg_raw_records_per_run,
     ROUND(AVG(jobs_added)  FILTER (WHERE status = 'success'))         AS avg_new_jobs_per_run
-FROM ops.pipeline_runs;
+FROM ops.pipeline_runs
+WHERE run_id LIKE 'launchd%';   -- scheduled launchd runs only (logging began 2026-10-27); the Oct 4 Airflow rows are excluded
 
 -- Longest streak without a failure is better evidence than a bare percentage:
-SELECT run_ts::date AS day, status, jobs_added FROM ops.pipeline_runs ORDER BY run_ts DESC LIMIT 14;
+SELECT run_ts::date AS day, status, jobs_added FROM ops.pipeline_runs WHERE run_id LIKE 'launchd%' ORDER BY run_ts DESC LIMIT 14;
 
 \echo '=== 5. SKILL EXTRACTION PRECISION AUDIT ==================================='
 -- Rule-based extraction can have false positives ("Go to market" -> Go).

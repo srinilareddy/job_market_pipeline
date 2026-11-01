@@ -21,6 +21,11 @@ MAX_RETRIES = 3
 # Seconds to wait between retries
 RETRY_DELAY = 10
 
+# Per-run API counters. main() prints them as one "API metrics:" line, which run_pipeline.py
+# stores in ops.pipeline_runs.  calls = every HTTP attempt, retries = attempts that were retried,
+# failures = pages skipped after all attempts failed (or an unparseable response).
+API_STATS = {"calls": 0, "retries": 0, "failures": 0}
+
 
 # ----------------------------
 # Helpers
@@ -90,6 +95,7 @@ def fetch_adzuna_jobs(country: str, search_term: str, location: str,
         # --- Retry loop ---
         success = False
         for attempt in range(1, MAX_RETRIES + 1):
+            API_STATS["calls"] += 1
             try:
                 r = requests.get(url, params=params, timeout=30)
                 r.raise_for_status()
@@ -99,11 +105,14 @@ def fetch_adzuna_jobs(country: str, search_term: str, location: str,
             except requests.RequestException as e:
                 log(f"  Attempt {attempt}/{MAX_RETRIES} failed: {e}")
                 if attempt < MAX_RETRIES:
+                    API_STATS["retries"] += 1
                     log(f"  Retrying in {RETRY_DELAY}s...")
                     time.sleep(RETRY_DELAY)
                 else:
+                    API_STATS["failures"] += 1
                     log(f"  All {MAX_RETRIES} attempts failed for page {page}. Skipping.")
             except ValueError:
+                API_STATS["failures"] += 1
                 log(f"  Could not parse JSON on page {page}. Skipping.")
                 break 
 
@@ -161,6 +170,9 @@ def main():
             max_days_old=max_days_old,
         )
         all_jobs.extend(jobs)
+
+    # Printed before the empty-result return below, so a total API outage is recorded too.
+    log(f"API metrics: calls={API_STATS['calls']} retries={API_STATS['retries']} failures={API_STATS['failures']}")
 
     if not all_jobs:
         log("No jobs were collected. Check your API keys, search terms, and location.")
