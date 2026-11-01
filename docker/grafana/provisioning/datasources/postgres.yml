@@ -1,0 +1,15 @@
+apiVersion: 1
+datasources:
+  - name: Pipeline run log
+    uid: jm-pg
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: $PIPELINE_DB_URL
+    user: grafana_ro
+    isDefault: true
+    editable: false
+    jsonData:
+      database: $PIPELINE_DB_NAME
+      sslmode: disable
+    secureJsonData:
+      password: $GRAFANA_DB_PASSWORD
