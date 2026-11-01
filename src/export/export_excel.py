@@ -67,7 +67,7 @@ def read_gold(engine) -> dict[str, pd.DataFrame]:
         salary[col] = pd.to_numeric(salary[col], errors="coerce")
     jobs["posting_date"] = pd.to_datetime(jobs["posting_date"])
     jobs["contract_time"] = jobs["contract_time"].fillna("")
-    runs["run_ts"] = pd.to_datetime(runs["run_ts"]).dt.tz_localize(None)
+    runs["run_ts"] = pd.to_datetime(runs["run_ts"], utc=True).dt.tz_convert("America/Chicago").dt.tz_localize(None)
     return {"jobs": jobs, "skills": skills, "salary": salary, "runs": runs}
 
 
