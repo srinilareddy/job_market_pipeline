@@ -77,3 +77,34 @@ def test_aliases_are_merged():
     got = set(extract_skills("Amazon Web Services (AWS), Google Cloud, Microsoft Azure and Natural Language Processing (NLP)"))
     assert {"aws", "gcp", "azure", "nlp"} <= got, got
     assert not ({"amazon web services", "google cloud", "microsoft azure", "natural language processing"} & got), got
+
+
+# --- title + description extraction and audit evidence ---
+from skill_extractor_hybrid import extract_job_skills, find_evidence, job_skill_text  # noqa: E402
+
+
+def test_skill_named_only_in_the_title_is_found():
+    # Adzuna cuts descriptions at ~500 chars; the title may be the only place a skill appears
+    assert "snowflake" in extract_job_skills("Data Engineer (Snowflake, dbt)", "Join our growing team.")
+    assert "go" in extract_job_skills("Backend Engineer (Go)", "")
+    assert extract_job_skills("Team Lead", "Go to market strategy") == []
+
+
+def test_job_skill_text_handles_missing_parts():
+    assert job_skill_text(None, "Python") == "Python"
+    assert job_skill_text("Analyst", None) == "Analyst"
+    assert job_skill_text("Analyst", "SQL") == "Analyst. SQL"
+
+
+def test_evidence_points_at_the_real_match_not_a_substring():
+    text = "Playwright tests in JavaScript, plus Java services"
+    ev = find_evidence("java", text)
+    assert ev["matched"] == "Java" and text[ev["start"]:ev["end"]] == "Java"      # not inside "JavaScript"
+    assert find_evidence("java", "only JavaScript here") is None
+
+
+def test_evidence_for_ambiguous_aliased_and_case_sensitive_skills():
+    assert find_evidence("go", "Proficiency in Python, Go, and SQL")["matched"] == "Go"
+    assert find_evidence("go", "Go to market mindset") is None
+    assert find_evidence("aws", "Amazon Web Services experience")["matched"] == "Amazon Web Services"
+    assert find_evidence("excel", "Skilled in Excel and SQL")["matched"] == "Excel"

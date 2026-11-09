@@ -134,7 +134,8 @@ _CONTEXT_PREFIX = r"(?:[,/(;\u2022\-]|\b(?:with|in|using|and|or|of)\b)\s*"
 # Words that, right after the skill, show it is ordinary English ("Go Fast", "Go Live", "Go to market").
 _BLOCKED_NEXT_WORD = {"go": r"to|fast|live|big|above|beyond|further|forward|ahead|getter|green"}
 
-def _ambiguous_match(skill: str, text: str) -> bool:
+def _ambiguous_regex(skill: str) -> str:
+    """Regex for an ambiguous skill. Group "skill" is the skill token itself (used for audit evidence)."""
     cap = re.escape(skill.capitalize() if len(skill) > 1 else skill.upper())
     # trailing "&" rejects "R&R", "R&D", "C&I"; "(?!\.\w)" rejects "R.js"-style tokens
     tail = r"(?![\w+#&-])(?!\.\w)"
@@ -142,7 +143,11 @@ def _ambiguous_match(skill: str, text: str) -> bool:
     if block:
         tail += rf"(?!\s+(?i:{block})\b)"
     # (?<!HVAC) rejects "HVAC/R" (refrigeration), which otherwise reads like "...slash R"
-    return re.search(r"(?<!HVAC)" + _CONTEXT_PREFIX + cap + tail, text) is not None
+    return r"(?<!HVAC)" + _CONTEXT_PREFIX + "(?P<skill>" + cap + ")" + tail
+
+
+def _ambiguous_match(skill: str, text: str) -> bool:
+    return re.search(_ambiguous_regex(skill), text) is not None
 
 
 # "excel" is also a verb ("you should excel in..."). The software is virtually always written
@@ -329,6 +334,68 @@ def extract_skills(text: str, strict_mode: bool = True) -> List[str]:
     """
     extractor = get_skill_extractor(strict_mode=strict_mode)
     return extractor.extract_skills(text)
+
+
+def job_skill_text(title: str | None, description: str | None) -> str:
+    """
+    The text skills are extracted from: the job title followed by the description.
+    Adzuna's search API cuts descriptions off at ~500 characters, so the title (often "Data Engineer
+    (Snowflake, dbt)" or "Backend Engineer - Go") can be the only place a skill is named.
+    """
+    title = (title or "").strip()
+    description = (description or "").strip()
+    if title and description:
+        return f"{title}. {description}"
+    return title or description
+
+
+def extract_job_skills(title: str | None, description: str | None) -> List[str]:
+    """extract_skills() over title + description. Use this for jobs, extract_skills() for free text."""
+    return extract_skills(job_skill_text(title, description))
+
+
+def find_evidence(skill: str, text: str, width: int = 60) -> dict | None:
+    """
+    Where in `text` a skill was matched, for the precision audit (src/db/skill_audit.py).
+    Uses the same patterns as extraction (ambiguous-name rules, case-sensitive skills, aliases), so
+    the context shown is the one the extractor really saw - unlike a plain substring search, which
+    finds "java" inside "JavaScript". Returns {"matched", "start", "end", "context"} or None when
+    the skill cannot be located (e.g. it came from a CamelCase/acronym candidate in another form).
+    """
+    names = [skill] + [alias for alias, canon in SKILL_ALIASES.items() if canon == skill]
+    best = None
+    for name in names:
+        if name in _CASE_SENSITIVE_SKILLS:
+            m = re.search(_CASE_SENSITIVE_SKILLS[name], text)
+        elif name in AMBIGUOUS_SKILLS:
+            m = re.search(_ambiguous_regex(name), text)
+            if m:
+                m = _SpanOnly(m.start("skill"), m.end("skill"), text)
+        else:
+            m = re.search(r"(?<![\w])" + re.escape(name) + r"(?![\w])", text, re.IGNORECASE)
+        if m and (best is None or m.start() < best.start()):
+            best = m
+    if best is None:
+        return None
+    a, b = best.start(), best.end()
+    return {
+        "matched": text[a:b],
+        "start": a,
+        "end": b,
+        "context": text[max(a - width, 0):b + width],
+    }
+
+
+class _SpanOnly:
+    """Minimal stand-in for a re.Match when only the skill group's span matters."""
+    def __init__(self, start: int, end: int, text: str):
+        self._s, self._e = start, end
+
+    def start(self) -> int:
+        return self._s
+
+    def end(self) -> int:
+        return self._e
 
 
 # ============================================================================

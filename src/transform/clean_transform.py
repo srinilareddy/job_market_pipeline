@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
-from skill_extractor_hybrid import extract_skills
+from skill_extractor_hybrid import extract_job_skills
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 RAW_DIR = BASE_DIR / "data" / "raw"
@@ -136,7 +136,7 @@ def main():
         })
 
         # Extract and store skill associations
-        skills = extract_skills(description)
+        skills = extract_job_skills(title, description)
         for sk in skills:
             job_skills_rows.append({
                 "source_job_id": source_job_id,

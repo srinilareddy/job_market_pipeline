@@ -26,7 +26,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "transform"))
 from gold_ops import refresh  # noqa: E402
 from load_to_db import get_engine  # noqa: E402
-from skill_extractor_hybrid import extract_skills  # noqa: E402
+from skill_extractor_hybrid import extract_job_skills  # noqa: E402
 
 CHUNK = 5000
 
@@ -55,7 +55,7 @@ def main() -> None:
 
     engine = get_engine()
     with engine.connect() as conn:
-        jobs = conn.execute(text("SELECT job_pk, description FROM jobs_fact")).all()
+        jobs = conn.execute(text("SELECT job_pk, title, description FROM jobs_fact")).all()
         before, b_jobs, b_links = current_stats(conn)
     total = len(jobs)
     print(f"Re-extracting skills for {total} jobs ...")
@@ -63,8 +63,8 @@ def main() -> None:
     pairs: list[tuple[int, str]] = []
     after: Counter = Counter()
     jobs_with = 0
-    for job_pk, desc in jobs:
-        skills = extract_skills(desc or "")
+    for job_pk, title, desc in jobs:
+        skills = extract_job_skills(title, desc)
         if skills:
             jobs_with += 1
         for sk in skills:
