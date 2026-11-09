@@ -116,15 +116,49 @@ def notify_success(ti=None, **_) -> None:
     )
 
 
+# --- Run guard: never overlap the launchd run (src/run_guard.py, stdlib only) -----
+def _run_guard():
+    sys.path.insert(0, str(PROJECT_HOME / "src"))
+    import run_guard
+    return run_guard
+
+
+def claim_pipeline(**_) -> None:
+    """First task. Refuses to start while run_pipeline.py (launchd) is running, then marks this DAG run."""
+    rg = _run_guard()
+    if rg.pipeline_lock_held():
+        raise AirflowFailException(
+            "run_pipeline.py (launchd) is running right now; starting would make both runs read each "
+            "other's half-written files. Re-trigger after it finishes.")
+    rg.write_airflow_marker()
+
+
+def release_pipeline(**_) -> None:
+    """Last task (trigger_rule=all_done): remove the marker whether the run succeeded or failed."""
+    _run_guard().clear_airflow_marker()
+
+
 # --- Validation gates (stdlib only: these run inside Airflow's own environment) ----
+def _raw_file_time(path: Path) -> float:
+    """
+    Timestamp of a raw file from its name (...YYYYMMDD_HHMMSS.json) - the same definition
+    clean_transform.py uses to pick its input - falling back to mtime for an unexpected name.
+    """
+    parts = path.stem.split("_")
+    try:
+        return time.mktime(time.strptime(parts[-2] + parts[-1], "%Y%m%d%H%M%S"))
+    except (ValueError, IndexError):
+        return path.stat().st_mtime
+
+
 def validate_raw(**_) -> int:
     """Bronze gate. fetch_jobs.py exits 0 even when it collected nothing, so verify here."""
     min_jobs = int(os.environ.get("MIN_RAW_JOBS", 500))
-    files = sorted((PROJECT_HOME / "data" / "raw").glob("adzuna_*.json"), key=lambda p: p.stat().st_mtime)
+    files = sorted((PROJECT_HOME / "data" / "raw").glob("adzuna_*.json"), key=_raw_file_time)
     if not files:
         raise AirflowFailException("Bronze: no raw Adzuna files found.")
     newest = files[-1]
-    age_min = (time.time() - newest.stat().st_mtime) / 60
+    age_min = (time.time() - _raw_file_time(newest)) / 60
     if age_min > MAX_RAW_AGE_MIN:
         raise AirflowFailException(
             f"Bronze: newest raw file {newest.name} is {age_min:.0f} min old - this run fetched nothing new.")
@@ -184,6 +218,8 @@ with DAG(
     doc_md=__doc__,
 ) as dag:
 
+    claim = PythonOperator(task_id="claim_pipeline", python_callable=claim_pipeline, retries=0)
+
     with TaskGroup("bronze", tooltip="Ingest raw API data") as bronze:
         fetch = BashOperator(
             task_id="fetch_adzuna",
@@ -218,4 +254,7 @@ with DAG(
         notify = PythonOperator(task_id="notify_success", python_callable=notify_success, retries=0)
         export_xlsx >> log_run >> notify
 
-    bronze >> silver >> gold >> publish
+    release = PythonOperator(task_id="release_pipeline", python_callable=release_pipeline,
+                             retries=0, trigger_rule="all_done")
+
+    claim >> bronze >> silver >> gold >> publish >> release
