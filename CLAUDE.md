@@ -57,14 +57,14 @@ Docker: `cd docker && ./make-env.sh && docker compose build && docker compose up
 - Airflow DAG with bronze/silver/gold/publish task groups, validation gates, retries, `max_active_runs=1`
 
 ## Known issues and limitations [V unless marked]
-- **Two orchestrators write to the same database.** The launchd job (`run_pipeline.py`) and the Airflow DAG each run the pipeline. The DAG's `max_active_runs` only prevents overlap within Airflow, not with launchd. **[I]** this could overlap if both run.
-- `src/transform/skill_extractor.py` is an empty file. The working module is `skill_extractor_hybrid.py`.
-- "Newest file" is defined two ways: `validate_raw` uses file modification time, while `clean_transform.py` and `load_to_db.py` use the timestamp in the filename.
+- **Two orchestrators** (launchd `run_pipeline.py` and the Airflow DAG) write to the same database. Since 2026-11-08 `src/run_guard.py` blocks overlap on one machine (lock + marker file). Not tested against a live Airflow run; does not cover a Docker bind mount.
+- The empty `skill_extractor.py` was deleted on 2026-11-08; the working module is `skill_extractor_hybrid.py`.
+- "Newest file" is now one definition (filename timestamp) in `validate_raw`, `clean_transform.py` and `load_to_db.py`.
 - Skill matching keys on `raw_hash`. If two different postings share a hash, the bridge may attach skills to the wrong `job_pk`. **[I]** edge case, not tested.
 - Adzuna truncates descriptions (about 500 characters). Only 35.4% of postings have a detected skill (README), so skill counts are lower bounds.
 - `role_family` is a regex on titles. "Other" share should be checked before quoting role figures.
 - Salary statistics rest on 7.4% of postings with an employer-stated salary (README).
-- README run-count claim is stale: it says "45 consecutive daily runs (Sep 18 – Nov 1)". `data/logs/cron.log` has passing checks on 130 distinct dates from 2026-04-27 to 2026-11-08. Reconcile before quoting either.
+- README run count reconciled on 2026-11-08: 53 consecutive days with a passing check (2026-09-17 to 2026-11-08) in `cron.log`. `ops.pipeline_runs` only has 14 launchd runs because logging began 2026-10-27.
 - Power BI report not built; Slack webhook not configured; Airflow schedule paused (README).
 - Containers stop when the host sleeps (README).
 

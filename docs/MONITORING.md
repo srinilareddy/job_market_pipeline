@@ -23,3 +23,15 @@ open http://localhost:3000                           # user: admin, password: GR
 ```
 The dashboard "Job Market Pipeline - run log" is provisioned automatically from `docker/grafana/dashboards/`.
 Stop it with `docker compose --profile monitoring down` (or `docker compose stop grafana`).
+
+
+## Run time and Mac sleep
+Run time is driven by the fetch step, not by the database work. On 2026-10-31 and 2026-11-06 single API
+requests stalled for 15-63 minutes in `data/logs/ingestion.log` with no error, longer than the 30 s request
+timeout, which fits the Mac sleeping mid-request (a sleeping machine pauses the timeout clock). [I] The cause is
+inferred from the gaps; it was not observed directly.
+
+What the pipeline does about it now:
+- `run_pipeline.py` starts `caffeinate -i -s -w <pid>` so an idle Mac (or one on AC power) does not sleep during a run. Closing the lid on battery still sleeps the Mac.
+- `fetch_jobs.py` logs `System sleep detected ... ~Ns lost` when the wall clock runs ahead of the monotonic clock during a request, so the cause is visible in the log next time.
+- Failed pages get one recovery pass; a run with more than `max_failed_page_pct` (config, default 5) of pages still missing fails after saving what it fetched.

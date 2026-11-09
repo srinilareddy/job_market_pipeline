@@ -14,7 +14,7 @@ and publishes analysis-ready views and an **Excel** KPI scorecard. An **Apache A
 
 | Component | Status |
 |---|---|
-| Daily ELT (Bronze → Silver → Gold), scheduled with launchd | **Running.** 45 consecutive daily runs (Sep 18 – Nov 1, 2026), each passing the quality checks. Earlier September runs failed in the load step because the database was not reachable |
+| Daily ELT (Bronze → Silver → Gold), scheduled with launchd | **Running.** 53 consecutive days with a passing quality check (Sep 17 – Nov 8, 2026; counted from `data/logs/cron.log` on 2026-11-08). Earlier September runs failed in the load step because the database was not reachable |
 | Gold materialized views + run log (`ops.pipeline_runs`) | **Built.** Every daily run since 2026-10-27 refreshes Gold and logs itself |
 | Excel KPI scorecard (live formulas) | **Built** |
 | Airflow DAG (10 tasks) + Docker Compose stack | **Built and validated through manual runs.** Its own schedule is paused: Docker stops when a laptop sleeps (see Roadmap) |
@@ -63,15 +63,15 @@ As of **2026-11-01** (`docs/metrics.sql`; the Excel scorecard was generated the 
 | Collected per daily run | 2,250 (15 searches × 3 pages × 50 results); 289–593 are new (five scheduled runs, Oct 28 – Nov 1) |
 | Posted in the last 90 days | 96.3% (52.6% in the last 14 days), measured on 2026-10-11 |
 | Role families | 9; 0.6% unclassified |
-| Postings with an employer-stated salary | 2,179 (7.4%); median $130,000 |
-| Salary values that are Adzuna estimates | 92.6% (kept separate and excluded from salary statistics) |
-| Distinct skills / postings with 1+ skill | 206 / 35.4% |
-| Quality-check passes | 45 consecutive daily runs (Sep 18 – Nov 1) |
+| Postings with an employer-stated salary | 2,530 (7.9%), measured 2026-11-08. The $130,000 median is from the earlier 2026-10-11 measurement; re-run `docs/metrics.sql` (section 3) before quoting it |
+| Salary values that are Adzuna estimates | 92.1%, measured 2026-11-08 (kept separate and excluded from salary statistics) |
+| Distinct skills / postings with 1+ skill | 207 / 35.1%, measured 2026-11-08. Adzuna's search API cuts descriptions at ~500 characters, so this is a lower bound; skills are now also read from the job title |
+| Quality-check passes | 53 consecutive days (Sep 17 – Nov 8), from `cron.log` |
 
 Reproduce the reliability figure from the scheduler log:
 
 ```bash
-grep "All quality checks passed" data/logs/cron.log | tail -n 45 | cut -c2-11   # one date per passing day
+grep "All quality checks passed" data/logs/cron.log | tail -n 53 | cut -c2-11   # one date per passing day
 grep "FAILED" data/logs/cron.log | cut -c2-11 | sort -u | tail -n 3          # last failing date
 ```
 

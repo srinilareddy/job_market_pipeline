@@ -21,19 +21,23 @@ Last verified: 2026-11-08 from the local checkout (`upgrade/airflow-gold-excel`,
 
 ## Run history [V]
 - `data/logs/cron.log` has passing quality checks on 130 distinct dates, from 2026-04-27 to 2026-11-08.
-- README says "45 consecutive daily runs (Sep 18 – Nov 1, 2026)" and that the Excel scorecard is dated 2026-11-01. **The README figure does not match the log.** Treat the README as out of date.
+- The longest run of consecutive days with a passing quality check in `cron.log` is 53 days (2026-09-17 to 2026-11-08); the last failure line is dated 2026-09-16. The README's earlier "45 days (Sep 18 – Nov 1)" was correct on Nov 1 and was only out of date; it now says 53. [V] 2026-11-08
+- `ops.pipeline_runs` holds 14 launchd runs (2026-10-27 onward) because run logging started that day. That table is not the source for the longer streak.
 - `data/raw/` holds 173 raw files and `data/processed/` holds 351 CSVs. Nothing in the repo prunes them. **[I]** they will keep growing.
 
 ## Test status [V]
-- 15 tests in `tests/` (12 skill extractor, 3 fetch). CI runs them on push.
-- Not run in this review.
+- 28 tests in `tests/` after the 2026-11-08 changes (skill extractor, fetch, run guard, audit arithmetic); all passed when run on 2026-11-08. CI runs them on push.
 
 ## Known gaps [V]
-1. Two orchestrators (launchd and Airflow) can both write to the same database.
-2. The empty `skill_extractor.py` file.
-3. Mismatch between the README run count and the log.
-4. Two definitions of "newest raw file".
+Fixed on 2026-11-08:
+1. ~~Two orchestrators can overlap~~ -> `src/run_guard.py`: launchd run holds a lock, the DAG's first task refuses to start while it is held, and the DAG leaves a marker that makes `run_pipeline.py` refuse to start. Same-machine only; not tested against a live Airflow.
+2. ~~Empty `skill_extractor.py`~~ -> deleted (nothing imported it).
+3. ~~README run count~~ -> README updated to the verified 53 days.
+4. ~~Two definitions of "newest raw file"~~ -> `validate_raw` now uses the filename timestamp like `clean_transform.py`.
+
+Still open:
 5. No automated tests for loading, quality checks or Gold SQL.
+6. `raw_hash` collision risk in the skill bridge.
 
 ## Not verified in this review [I]
 - The database contents, the figures in the README, and `docs/metrics.sql` output.

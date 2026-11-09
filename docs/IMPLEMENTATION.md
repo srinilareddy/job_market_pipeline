@@ -5,10 +5,11 @@ Legend: **[V]** verified in code, **[I]** inferred, **[P]** proposed.
 ## Modules [V]
 | File | Key functions | Notes |
 |---|---|---|
-| `src/ingestion/fetch_jobs.py` | `fetch_adzuna_jobs`, `save_raw_json`, `main` | Module-level `API_STATS`; `require_env` fails fast on missing keys |
+| `src/ingestion/fetch_jobs.py` | `fetch_adzuna_jobs`, `recover_failed_pages`, `save_raw_json`, `main` | Module-level `API_STATS`; retries each page, one recovery pass at the end, logs system sleep, exits 1 above `max_failed_page_pct` (default 5%) after saving; optional `sort_by` / `max_days_old` from config |
 | `src/transform/clean_transform.py` | `newest_raw_file`, `clean_text`, `safe_get`, `compute_hash`, `main` | Imports `skill_extractor_hybrid` by bare module name, so the script directory must be on `sys.path` (it is, when run as a script) |
-| `src/transform/skill_extractor_hybrid.py` | `HybridSkillExtractor`, `extract_skills`, `get_skill_extractor` | Singleton extractor; strict mode by default |
-| `src/transform/skill_extractor.py` | none | Empty file (0 bytes). Safe to delete after review; not deleted here |
+| `src/transform/skill_extractor_hybrid.py` | `HybridSkillExtractor`, `extract_skills`, `extract_job_skills`, `find_evidence`, `get_skill_extractor` | Singleton extractor; strict mode by default; jobs are extracted from title + description |
+| `src/run_guard.py` | `acquire_pipeline_lock`, `pipeline_lock_held`, `write_airflow_marker` | Stops launchd and the Airflow DAG overlapping (same machine) |
+| `src/db/skill_audit.py` | `sample`, `score` | Samples (job, skill) pairs with the exact matched text; computes hand-labelled precision with a 95% interval |
 | `src/db/load_to_db.py` | `get_engine`, `upsert_dim`, `main` | Credentials from `.env` only |
 | `src/db/quality_checks.py` | `get_engine`, `main` | Raises `SystemExit` on failed checks |
 | `src/db/gold_ops.py` | `refresh`, `log_success`, `log_failure`, `main` | `log_failure` never raises (alerting path) |
