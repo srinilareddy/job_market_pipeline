@@ -35,6 +35,10 @@ def main():
         "Distinct locations":     "SELECT COUNT(*) FROM locations_dim;",
         "Distinct skills":        "SELECT COUNT(*) FROM skills_dim;",
         "Skills links":           "SELECT COUNT(*) FROM job_skills_bridge;",
+        # Skill coverage. Adzuna's search API cuts descriptions at ~500 chars, so many jobs never show
+        # their skills; these two lines make that limit visible on every run (warning only, never fails).
+        "Jobs w/ 1+ skill":       "SELECT COUNT(DISTINCT job_pk) FROM job_skills_bridge;",
+        "Descriptions at API length cap (>=490 chars)": "SELECT COUNT(*) FROM jobs_fact WHERE length(description) >= 490;",
         # Data quality
         "Null titles":            "SELECT COUNT(*) FROM jobs_fact WHERE title IS NULL OR title = '';",
         "Null companies":         "SELECT COUNT(*) FROM jobs_fact WHERE company_id IS NULL;",
@@ -64,6 +68,14 @@ def main():
             results[label] = val
             print(f"  {label}: {val}")
         print("------------------------------")
+
+    total = results["Total jobs"] or 1
+    coverage = 100.0 * results["Jobs w/ 1+ skill"] / total
+    capped = 100.0 * results["Descriptions at API length cap (>=490 chars)"] / total
+    print(f"  Skill coverage: {coverage:.1f}% of jobs have 1+ skill | {capped:.1f}% of descriptions are cut at the API length cap")
+    min_cov = float(os.getenv("MIN_SKILL_COVERAGE_PCT", "25"))
+    if coverage < min_cov:
+        print(f"  WARNING: skill coverage {coverage:.1f}% is below {min_cov:.0f}% - check the skill extractor / description field.")
 
     # --------------------------------------------------
     # Failure thresholds — exits with non-zero code so
