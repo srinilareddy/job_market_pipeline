@@ -35,11 +35,19 @@ def main():
         "Distinct locations":     "SELECT COUNT(*) FROM locations_dim;",
         "Distinct skills":        "SELECT COUNT(*) FROM skills_dim;",
         "Skills links":           "SELECT COUNT(*) FROM job_skills_bridge;",
+        # Skill coverage. Adzuna's search API cuts descriptions at ~500 chars, so many jobs never show
+        # their skills; these two lines make that limit visible on every run (warning only, never fails).
+        "Jobs w/ 1+ skill":       "SELECT COUNT(DISTINCT job_pk) FROM job_skills_bridge;",
+        "Descriptions at API length cap (>=490 chars)": "SELECT COUNT(*) FROM jobs_fact WHERE length(description) >= 490;",
         # Data quality
         "Null titles":            "SELECT COUNT(*) FROM jobs_fact WHERE title IS NULL OR title = '';",
         "Null companies":         "SELECT COUNT(*) FROM jobs_fact WHERE company_id IS NULL;",
         "Null locations":         "SELECT COUNT(*) FROM jobs_fact WHERE location_id IS NULL;",
-        "Jobs with salary data":  "SELECT COUNT(*) FROM jobs_fact WHERE salary_avg IS NOT NULL;",
+        "Jobs w/ employer-stated salary": "SELECT COUNT(*) FROM jobs_fact WHERE salary_is_predicted IS FALSE AND salary_avg IS NOT NULL;",
+        "Jobs w/ Adzuna-estimated salary": "SELECT COUNT(*) FROM jobs_fact WHERE salary_is_predicted IS TRUE AND salary_avg IS NOT NULL;",
+        "Jobs w/ unknown salary flag":    "SELECT COUNT(*) FROM jobs_fact WHERE salary_is_predicted IS NULL AND salary_avg IS NOT NULL;",
+        "NaN text values":        "SELECT COUNT(*) FROM jobs_fact WHERE 'NaN' IN (contract_type, contract_time, redirect_url, description);",
+        "NaN salary values":      "SELECT COUNT(*) FROM jobs_fact WHERE salary_avg = 'NaN' OR salary_min = 'NaN' OR salary_max = 'NaN';",
         "Duplicate source IDs": """
             SELECT COUNT(*) FROM (
                 SELECT source, source_job_id, COUNT(*) c
@@ -61,6 +69,14 @@ def main():
             print(f"  {label}: {val}")
         print("------------------------------")
 
+    total = results["Total jobs"] or 1
+    coverage = 100.0 * results["Jobs w/ 1+ skill"] / total
+    capped = 100.0 * results["Descriptions at API length cap (>=490 chars)"] / total
+    print(f"  Skill coverage: {coverage:.1f}% of jobs have 1+ skill | {capped:.1f}% of descriptions are cut at the API length cap")
+    min_cov = float(os.getenv("MIN_SKILL_COVERAGE_PCT", "25"))
+    if coverage < min_cov:
+        print(f"  WARNING: skill coverage {coverage:.1f}% is below {min_cov:.0f}% - check the skill extractor / description field.")
+
     # --------------------------------------------------
     # Failure thresholds — exits with non-zero code so
     # the pipeline log captures failures in automation.
@@ -75,6 +91,16 @@ def main():
         raise SystemExit(f"❌ Quality check FAILED: {null_titles} job(s) have null/empty titles.")
     if duplicates > 0:
         raise SystemExit(f"❌ Quality check FAILED: {duplicates} duplicate source ID(s) detected.")
+    if results["NaN text values"] > 0:
+        raise SystemExit(
+            f"❌ Quality check FAILED: {results['NaN text values']} job(s) have the literal text 'NaN' in a text column. "
+            "Run: python src/db/fix_nan_values.py"
+        )
+    if results["NaN salary values"] > 0:
+        raise SystemExit(
+            f"❌ Quality check FAILED: {results['NaN salary values']} job(s) have NaN salary values "
+            "(should be NULL). Run: python src/db/fix_nan_values.py"
+        )
 
     print("✅ All quality checks passed.")
 
